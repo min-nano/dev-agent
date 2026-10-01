@@ -20,6 +20,11 @@
   作法が変わらない。
 - **リポジトリごとの「期待する動作」は、そのリポジトリの `dev-agent.yaml`（マニフェスト）に
   宣言しておき**、dev-agent が PR ごとの依頼と合わせてローカルエージェントへ渡す。
+- **環境はアプリが抱える。** ローカル LLM の実行基盤・ビルドの道具（Node・Python・
+  CMake・Vectorworks SDK）・Claude Code・モデル・作業用の worktree は、すべて dev-agent が
+  同梱するか初回に取り寄せ、**アプリのデータ領域の中だけ**に置く。Mac を入れ替えても
+  dev-agent を入れれば環境が揃い、データ領域を消せば元に戻る（第 4.10 節）。外に残る前提は
+  macOS・Xcode・Vectorworks 本体・claude.ai のログインだけ。
 - 既存サービスで置き換えられるものは置き換える（第 3 節）。dev-agent 自身は、既存サービスが
   持たない 3 つ——**アプリ固有の入れ替えと起動（アダプタ）・マニフェスト・結果の投稿**——
   に絞って薄く作る。
@@ -115,13 +120,16 @@
 | --- | --- | --- | --- |
 | **Claude Code Remote Control**（`claude remote-control`） | Mac 上で動く Claude Code のセッションを claude.ai／クラウドセッションから操作できる。実行とファイルアクセスは Mac 側。Pro / Max で使える。外向き HTTPS だけで、Mac に口を開けない | **採用（ローカルの「賢い頭脳」）** | クラウドエージェントが「実機で確かめて」と依頼する相手になる。Mac で常駐させ（`--spawn worktree` で PR ごとに worktree）、クラウドセッションの `send_message` で依頼が届くかを M0 で確かめる。制約: `ANTHROPIC_BASE_URL` を向け替えると使えない（＝ローカル LLM とは別プロセスになる）。初回は TTY で信頼の確認が要る |
 | **Claude Code 非対話モード**（`claude -p --bare`） | スクリプトから 1 回分の仕事を投げられる。`--allowedTools` / `--permission-mode` / `--json-schema` で縛れる。終了コードと JSON で結果が取れる | **採用（定型の直しの実行器）** | dev-agent が「失敗ログ＋マニフェストの期待＋許した範囲」を渡して走らせる。頭脳は環境変数で切り替える（次項） |
-| **Ollama の Anthropic 互換 API**（`/v1/messages`） | `ANTHROPIC_BASE_URL=http://localhost:11434` で **Claude Code をそのままローカル LLM で動かせる**。tool use 対応。推奨モデルは `qwen3-coder` / `gpt-oss:20b`。Apple Silicon で MLX 最適化あり | **採用（ローカルの「安い頭脳」）** | 同じハーネス（`CLAUDE.md`・hooks・permissions・skills）が効くので、頭脳を変えても作法が変わらない。LM Studio（OpenAI 互換）や oMLX も候補だが、Anthropic 互換で Claude Code を直接つなげる点で Ollama を第 1 候補にする。`tool_choice` 強制・プロンプトキャッシュは無い |
+| **Ollama の Anthropic 互換 API**（`/v1/messages`） | `ANTHROPIC_BASE_URL=http://localhost:11434` で **Claude Code をそのままローカル LLM で動かせる**。tool use 対応。推奨モデルは `qwen3-coder` / `gpt-oss:20b`。Apple Silicon で MLX 最適化あり。MIT ライセンスで、CLI 版（`ollama-darwin.tgz`）を**アプリに同梱して再配布できる** | **採用（ローカルの「安い頭脳」。dev-agent に同梱）** | 同じハーネス（`CLAUDE.md`・hooks・permissions・skills）が効くので、頭脳を変えても作法が変わらない。利用者に別途入れてもらわず、dev-agent の `.app` の中に CLI 版を同梱し、`OLLAMA_MODELS` と `OLLAMA_HOST` をアプリのデータ領域と専用ポートへ向けて dev-agent が起動・停止する。LM Studio（OpenAI 互換）や oMLX も候補だが、Anthropic 互換を Ollama 側が保守している点が決め手。`tool_choice` 強制・プロンプトキャッシュは無い |
 | **Claude Code ルーティン**（クラウド。API／GitHub イベント／スケジュール） | GitHub の PR イベントや HTTP POST でクラウドセッションを起こせる。SDK リファレンスの `issue-webhook` が既に使っている | **採用（クラウド側の起点。既に使用中）** | 「dev-agent の結果が PR に載った → クラウドが読む」は、PR 購読（`subscribe_pr_activity`）とルーティンで賄える。ローカルでは走らない |
 | **Claude Code Desktop のローカル・スケジュールタスク** | Mac 上で、Desktop アプリが開いている間、最短 1 分間隔で Claude のセッションを起こせる。ローカルのファイルと道具に届く | **補助（M0 の足場）** | 何も作らずに「ローカルで Claude が PR を見に行く」を試せる。ただし毎回 LLM が起きるので**待ち受けのポーリングには向かない**（使用量を食う）。常用の監視は dev-agent が LLM 無しで行う |
 | **Claude Code セルフホスト環境** | クラウドセッションを自前のランナーで走らせる | **使えない（確定）** | Team / Enterprise 限定（公開ベータ）。本件は個人の Max プランなので対象外 |
 | **GitHub Actions のセルフホストランナー**（Mac） | PR のワークフローを Mac で走らせられる。ログと結果が GitHub のチェックとして残る。実績が多い | **第 2 段階で併用を検討** | 「Mac でビルド・テストを走らせる」だけなら最短。欠点: (1) GUI アプリ（Vectorworks）を動かすにはログイン中のユーザーセッションで動かす必要がある、(2) **公開リポジトリ（portal）では使ってはいけない**（誰の PR でも任意コードが走る）、(3) 入れ替え・起動・観測のアプリ固有の処理は結局スクリプトとして書く。dev-agent の `run --pr N` をランナーのジョブから呼ぶ形なら両立するので、ワークフロー側に寄せたくなったときに足す |
 | **OpenCode / Goose / Aider / Codex CLI**（ローカル LLM 対応のコーディングエージェント） | いずれも Ollama 等で動く。OpenCode は `opencode serve` で HTTP API から駆動できる | **採用しない（当面）** | Claude Code＋Ollama で同じことができ、しかもハーネスを 1 つに保てる。Claude Code をローカル LLM で動かした成績が悪ければ、OpenCode の serve モードを第 2 候補として試す |
-| **agent-mlx（自作の MLX チャットアプリ）** | MLX でローカル推論。CLI あり | **頭脳としては使わない** | HTTP サーバも tool-call も無く、CLI は 1 往復ごとにモデルを読み直す。エージェントの推論基盤にするには Ollama 相当を作ることになり、本題から外れる。agent-mlx は「dev-agent が実機で確かめる対象」の 1 つとして扱う |
+| **agent-mlx（自作の MLX チャットアプリ）／mlx-swift-lm** | MLX でローカル推論。mlx-swift-lm は tool calling（`ToolCallProcessor`。qwen / json / xmlFunction 形式）を持つ | **当面は使わない（将来の置き換え候補）** | dev-agent の中に Anthropic 互換の `/v1/messages` サーバを Swift で書けば、外部ランタイム無しで「アプリで完結」できる。ただし Claude Code が使う API の細部（streaming のイベント形・thinking・`cache_control`）を自前で追い続けることになり、同梱した Ollama より保守が重い。**同梱 Ollama で始め、Ollama の同梱が重荷になったときに agent-mlx のエンジンを土台に置き換える**。agent-mlx は「dev-agent が実機で確かめる対象」の 1 つとして扱う |
+| **Apple Containerization**（macOS 26。`container` CLI と Swift パッケージ。1.0 は 2026-06） | Linux コンテナを 1 つずつ軽量 VM で動かす。Docker Desktop 不要。Swift パッケージとしてアプリに組み込める | **採用（Linux 向けの道具のサンドボックス）** | Node・Python・Rust のように Linux でも同じに動く道具は、dev-agent が組み込んだ Containerization の VM の中で動かし、worktree だけをマウントする。イメージと VM の中身はアプリのデータ領域に置く。**macOS 26 と Apple Silicon が要る**（M0 で組み込みの可否を確かめる） |
+| **Docker Desktop**（導入済み） | Linux コンテナ | **使わない（代替は上記）** | 別途入れて保守する物が 1 つ増える。Apple Containerization が組み込めない事情が出たときの退避先として残す |
+| **Claude Code（CLI 本体）** | 頭脳の実行器。native 版は `~/.local/bin` 固定で置き場所を変えられない | **採用（npm 版をデータ領域へ入れる）** | 同梱した Node で `npm install -g --prefix <データ領域>` し、`CLAUDE_CONFIG_DIR` もデータ領域へ向ける。版は dev-agent 側で固定し（`DISABLE_AUTOUPDATER=1`）、更新は dev-agent のリリースで行う。ログイン（claude.ai の OAuth）だけはブラウザで 1 度人が行う |
 | **Tailscale / Cloudflare Tunnel / ngrok** | クラウドから Mac へ届く口を作る | **使わない** | クラウドセッションの egress は許可リスト制で、しかも Mac に口を開ける必要が無い。連絡は GitHub（ラベル・コメント・リリース）と Remote Control の外向き接続で足りる |
 
 ### 3.2 既製で賄えないもの＝dev-agent が担うもの
@@ -135,6 +143,10 @@
    合格とし、どこまで直してよいかの宣言と、それをローカルエージェントへ渡す仕組み。
 3. **往復の進行と結果の投稿。** head の更新の検知・周の管理・停止の合図・結果コメントの
    投稿・トークンの保管。今は 4 つのリポジトリが別々に持っているものを 1 か所にする。
+
+4. **環境の抱え込み。** 道具・SDK・モデル・Claude Code をアプリのデータ領域に揃え、
+   消せば戻る形に保つ（第 4.10 節）。既製のパッケージマネージャ（Homebrew 等）は
+   「Mac 全体を変える」ので使わない。
 
 逆に、**「考える」部分は一切作らない**。頭脳は Claude Code（Remote Control／`claude -p`）
 と Ollama で、dev-agent は材料を揃えて渡し、結果を回収するだけにする。
@@ -351,9 +363,9 @@ context:                                    # エージェントへ渡す追加�
 | `web` | `core/build.sh`（wasm）→ `npm run build`。API は手元の uvicorn（`static-channels/development`） | 無し（手元の dev サーバを立てる。CI のプレビュー URL で回すこともできる） | ブラウザで開いて煙試験（Playwright。Clerk の開発インスタンスのログイン状態を保存しておく） | 画面・コンソール・`/api/healthz` | **公開リポジトリ**なので、他人の PR では絶対に動かさない（第 4.7 節） |
 
 アダプタは「ビルドする・入れ替える・起動する・走らせる・回収する」の 5 つの操作に揃え、
-dev-agent の本体は種類を知らない（G4）。**ビルドの道具（SDK・Xcode・Metal ツールチェーン・
-Node・Python）は Mac に入れておくものとし、無ければ `dev-agent doctor` が名指しして
-`artifact.fallback` へ倒す。**新しい種類は、アダプタ 1 つとマニフェストの `kind` を足すだけ。
+dev-agent の本体は種類を知らない（G4）。**ビルドの道具は dev-agent が揃える**（Node・
+CMake・uv/Python・Rust・Vectorworks SDK。第 4.10 節）。Xcode と Metal ツールチェーンだけは
+外にあるものを使い、無ければ `dev-agent doctor` が名指しして `artifact.fallback` へ倒す。新しい種類は、アダプタ 1 つとマニフェストの `kind` を足すだけ。
 
 ### 4.6 ローカルエージェント（頭脳）の使い分け
 
@@ -361,7 +373,7 @@ Node・Python）は Mac に入れておくものとし、無ければ `dev-agent
 | --- | --- | --- | --- |
 | A | **Claude（Remote Control）** | 対話が要るもの。クラウドの設計と実機の見え方をすり合わせる。画面を見ながらの調整 | Mac で `claude remote-control --spawn worktree` を常駐させ、クラウドセッションが話しかける。dev-agent は関与しない |
 | B | **Claude（`claude -p`）** | 定型だが判断の要るもの。実機の失敗ログから原因を当てて直す | dev-agent の AgentBridge が worktree で起こす。`--permission-mode acceptEdits` ＋ `--allowedTools` を `agent.allowed` から組む。`--json-schema` で「直したか・何を・なぜ」を受け取る |
-| C | **ローカル LLM（`claude -p` ＋ Ollama）** | 単純で量の多いもの。lint・コンパイルエラーの一次対応・テストの期待値合わせ・マニフェストの `expect` との突き合わせ | B と同じコマンドに `ANTHROPIC_BASE_URL=http://localhost:11434 ANTHROPIC_AUTH_TOKEN=ollama` を付けるだけ。失敗したら `escalate` に従って B へ |
+| C | **ローカル LLM（`claude -p` ＋ 同梱の Ollama）** | 単純で量の多いもの。lint・コンパイルエラーの一次対応・テストの期待値合わせ・マニフェストの `expect` との突き合わせ | B と同じコマンドに `ANTHROPIC_BASE_URL=http://127.0.0.1:<専用ポート> ANTHROPIC_AUTH_TOKEN=ollama` を付けるだけ。Ollama は dev-agent が必要なときだけ起動する。モデルは Mac のメモリから dev-agent が選ぶ（agent-mlx の `DeviceProfile` と同じ規則: 物理メモリ × 0.70 に収まる最大）。失敗したら `escalate` に従って B へ |
 
 - **同じハーネスで走らせる**ことが要点。`CLAUDE.md`・`.claude/settings.json` の
   permissions・hooks・skills は 3 段すべてで効く。各リポジトリにある「殻を触らない」
@@ -396,6 +408,14 @@ Node・Python）は Mac に入れておくものとし、無ければ `dev-agent
    トークンでは push しない）。**各アプリからトークンの扱いが消える。**
 7. **秘密をプロンプトに載せない。** AgentBridge はトークン・鍵をエージェントの環境変数にも
    プロンプトにも渡さない。
+8. **ビルドと実行は囲いの中で。** Linux で動く道具は Containerization の VM（worktree だけ
+   マウント）、Mac でしか動かないもの（Xcode・Vectorworks SDK・Vectorworks 本体）は
+   Seatbelt（`sandbox-exec`）で「worktree とデータ領域以外へ書けない」プロファイルの下で
+   動かす。エージェントの Bash は Claude Code 自身のサンドボックス設定を有効にして走らせる
+   （第 4.10 節）。
+9. **Mac 全体を変えない。** `/usr/local`・Homebrew・`~/.local`・シェルの rc には触れない。
+   dev-agent が置くものはデータ領域と launchd の plist 1 つだけで、`dev-agent uninstall` が
+   全部消す。
 
 ### 4.8 dev-agent の作り
 
@@ -411,17 +431,23 @@ Node・Python）は Mac に入れておくものとし、無ければ `dev-agent
   - `Sources/DevAgentBuilder/` … worktree の管理（`git worktree add` / fetch / checkout）と
     `build` 節の実行。PR ごとに `~/Library/Caches/dev-agent/<repo>/pr-<N>/{src,build}` を
     保ち、差分ビルドを効かせる。PR が閉じたら消す。
-  - `Sources/dev-agent/` … CLI。`watch`（常駐）／`run --repo --pr`（1 周だけ）／
-    `build --repo --pr`／`install --repo --build`／`doctor`（道具の有無）／`stop`／
-    `status`／`manifest check`。launchd で `watch` を常駐。
+  - `Sources/DevAgentToolchains/` … 道具の保管庫（第 4.10 節）。`toolchains.yaml`（版・URL・
+    SHA-256・同梱か取り寄せか）を読み、同梱物の展開・取り寄せ・検証・環境変数の組み立て。
+  - `Sources/DevAgentSandbox/` … Containerization の VM の起動とマウント、Seatbelt の
+    プロファイル生成。判断を置かない。
+  - `Sources/dev-agent/` … CLI。`setup`（道具とモデルを揃える）／`doctor`（足りない物の
+    名指し）／`watch`（常駐）／`run --repo --pr`（1 周だけ）／`build --repo --pr`／
+    `install --repo --build`／`stop`／`status`／`manifest check`／`uninstall`（全部消す）。
+    launchd で `watch` を常駐。
   - `Apps/DevAgentApp/` … メニューバーアプリ。一覧（repo × PR × 周）・ログ・停止・
     「このビルドを入れる」。判断を持たない。
 - **既存コードの流用**: `UpdateFeed`（Releases → チャンネル）はそのまま Core へ移す。
   Vectorworks の `vw-install.sh` / `vw-uninstall.sh` / `vw-probes-update.sh` は zip の
   直下にあるので、dev-agent はそれを呼ぶだけ（配置の知識を dev-agent に持ち込まない。
   これは Vectorworks 側の「同梱スクリプトに配置を書かない」規約と同じ理屈）。
-- **マニフェストの形式**: YAML（決定）。SwiftPM の依存は Yams を**唯一の例外**として
-  入れる。姉妹アプリの「外部依存ゼロ」はそのままで、dev-agent だけが 1 つ持つ。
+- **マニフェストの形式**: YAML（決定）。SwiftPM の依存は **Yams と Apple の
+  Containerization の 2 つだけ**を許す。姉妹アプリの「外部依存ゼロ」はそのままで、
+  dev-agent だけが持つ。
 - **状態の置き場**: `~/Library/Application Support/dev-agent/state/<repo>/<pr>.json`
   （周・最後に見た head・最後に投稿した時刻・予算の消費）。ビルドの中間物は
   `~/Library/Caches/dev-agent/`（消えても作り直せるもの）。Vectorworks の
@@ -444,6 +470,94 @@ Node・Python）は Mac に入れておくものとし、無ければ `dev-agent
 **順序は「dev-agent が同じことをできるようになってから消す」。** 消すのは M5（第 6 節）で、
 それまでは両方が動く期間を置く（dev-agent が入れ替えたビルドを、アプリ側のアップデータが
 「古い」と誤認して戻さないよう、移行期間はアプリ側の自動確認を切る）。
+
+### 4.10 環境の抱え込み（同梱・取り寄せ・サンドボックス・片付け）
+
+狙いは 2 つ。**Mac を入れ替えても dev-agent を入れれば環境が揃う**こと、**データ領域を
+消せば元に戻る**こと。そのために「何が外にあり、何をアプリが抱えるか」を先に決める。
+
+#### 外にあるもの（dev-agent は触らない）
+
+| もの | なぜ外か | dev-agent がすること |
+| --- | --- | --- |
+| macOS 26 以降・Apple Silicon | Containerization の前提 | `doctor` が版を見て、26 未満なら Linux 向けの道具をホストで動かす（囲いは Seatbelt だけ） |
+| Xcode（Metal ツールチェーン込み） | 10 GB 超で再配布できない | `doctor` が `xcode-select` と Metal ツールチェーンの有無を見る。足りなければ `xcodebuild -downloadComponent MetalToolchain` を提案する |
+| Vectorworks 2026 本体 | 確かめる対象そのもの | 起動・終了だけ行う |
+| claude.ai のログイン | OAuth はブラウザで人が行う | 初回に `claude auth login` を開く。資格情報はキーチェーン |
+| GitHub のトークン | 人が発行する（fine-grained PAT） | 初回に貼り付けてもらいキーチェーンへ |
+| iPhone の署名証明書（任意） | Apple Developer のもの | `run-ios.sh` がキーチェーンから引く |
+
+#### アプリが抱えるもの（データ領域）
+
+```
+~/Library/Application Support/dev-agent/
+  toolchains/         node/ cmake/ uv/ python/ rustup/ cargo/ vw-sdk/<版>/ claude/（npm の prefix）
+  models/             同梱 Ollama のモデル（OLLAMA_MODELS）
+  containers/         Containerization のイメージと VM の rootfs
+  claude-config/      CLAUDE_CONFIG_DIR（settings・セッション・記憶）
+  state/              <repo>/<pr>.json（周・head・予算）
+  toolchains.lock     実際に展開した版と SHA-256
+~/Library/Caches/dev-agent/
+  <repo>/pr-<N>/{src,build}   worktree と差分ビルドの中間物
+  spm/ derived-data/ npm/ cargo-target/
+~/Library/Logs/dev-agent/
+~/Applications/dev-agent/<name>/      確かめるために入れた .app
+~/Library/LaunchAgents/jp.min-nano.dev-agent.plist
+キーチェーン: dev-agent（GitHub トークン）、Claude Code の資格情報
+```
+
+**dev-agent が環境変数で全部をここへ向ける**: `PATH`（toolchains を先頭に）・
+`CARGO_HOME` / `RUSTUP_HOME`・`UV_PYTHON_INSTALL_DIR` / `UV_CACHE_DIR`・`npm_config_prefix` /
+`npm_config_cache`・`CLAUDE_CONFIG_DIR`・`OLLAMA_MODELS` / `OLLAMA_HOST`・`VW_SDK_DIR`・
+`DERIVED_DATA` / `SPM_DIR`（姉妹アプリの `xcode-build.sh` が読む）。各リポジトリのビルド
+スクリプトは変えない——**環境変数で置き場所を外から決められるようにしてあるものだけを
+使う**（無いものはそのリポジトリ側の小さな宿題）。
+
+#### 同梱か取り寄せか（`toolchains.yaml`）
+
+dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版・URL・SHA-256・入れ方**を
+固定する。CI は dev-agent をビルドするときにこの表を読んで同梱物を `.app` に入れ、
+`setup` は同じ表を読んで取り寄せ物をデータ領域へ入れる。**表が 1 つなので、同梱と
+取り寄せの境目を後から動かしても手順は変わらない。**
+
+| 道具 | 入れ方 | 理由 |
+| --- | --- | --- |
+| Ollama（CLI 版） | **同梱** | MIT。Anthropic 互換 API をこれが担う。版の固定が要る |
+| Node（LTS） | **同梱** | MIT。portal・Playwright・Claude Code（npm 版）が要る |
+| CMake | **同梱** | BSD-3。Vectorworks プラグインと VwSdkProbes が要る |
+| uv | **同梱** | MIT/Apache-2。Python 本体と venv をデータ領域の中に作る |
+| Python | 取り寄せ（uv が入れる） | python-build-standalone。macOS 既定の Python は触らない |
+| Rust（rustup・`wasm32-unknown-unknown`） | 取り寄せ | 大きい。`RUSTUP_HOME` / `CARGO_HOME` をデータ領域へ |
+| Vectorworks SDK | 取り寄せ | 再配布できない。URL は "latest" で中身が黙って変わるので ETag を `toolchains.lock` に記録し、CI（`vw-sdk-cache-key.sh`）と同じ版を使う |
+| Claude Code | 取り寄せ（同梱 Node の npm で prefix 指定） | native 版は置き場所を変えられない。版は表で固定し、自動更新を切る |
+| ローカル LLM のモデル | 取り寄せ（同梱 Ollama が pull） | 数十 GB。Mac のメモリに合わせて `doctor` が選ぶ |
+| Linux のコンテナイメージ | 取り寄せ（Containerization が pull） | Node / Python / Rust の Linux 版。worktree をマウントして使う |
+| Playwright のブラウザ | 取り寄せ（Node 側） | `PLAYWRIGHT_BROWSERS_PATH` をデータ領域へ |
+
+**版の更新は dev-agent のリリースで行う。** 週 1 回のワークフローが表の版と SHA-256 を
+上げる PR を立てる（SDK リファレンスの `sdk-index` と同じ流儀）。利用者側は dev-agent の
+自動アップデートを受けるだけで、道具の版が揃って上がる。
+
+#### 囲い（サンドボックス）の 3 層
+
+| 層 | 何を | どう囲うか |
+| --- | --- | --- |
+| 1. 置き場所 | 全部 | 上の環境変数で、書き込み先をデータ領域と worktree に限る。これが土台で、残り 2 層が無くても「消せば戻る」は成り立つ |
+| 2. Linux 向けの道具 | Node / Python / Rust のビルド・テスト・Playwright | dev-agent が組み込んだ Containerization の VM。worktree と必要なキャッシュだけマウントし、ネットワークは npm / PyPI / crates.io に限る。ホストの `$HOME` は見えない |
+| 3. Mac でしか動かないもの | Xcode のビルド・Vectorworks SDK のビルド・Vectorworks 本体・エージェントの `claude -p` | Seatbelt（`sandbox-exec`）のプロファイルで、書き込みを worktree・データ領域・一時ディレクトリに限る。Vectorworks の Plug-Ins フォルダだけ例外で許す。`claude -p` は Claude Code 自身のサンドボックス設定（Bash の囲い）も有効にする |
+
+第 2 層は **macOS 26 でしか使えない**ので、`doctor` が版を見て、26 未満なら第 3 層だけで
+動かす（機能は落ちない。囲いが弱くなるだけ）。Docker Desktop はどちらの層にも使わない。
+
+#### 片付け
+
+- `dev-agent uninstall` が、上の「アプリが抱えるもの」を**上から順に全部消す**（データ
+  領域・キャッシュ・ログ・`~/Applications/dev-agent/`・launchd の plist・キーチェーンの
+  2 項目）。Vectorworks の Plug-Ins に入れた dev ビルドは、各リポジトリのアンインストーラ
+  （`vw-uninstall.sh`。フォルダ名が一致し中に殻があるときだけ消す）に任せる。
+- 消してよいのは**自分が置いたものだけ**。Xcode・Vectorworks・`~/.ollama`（利用者が別に
+  入れていたもの）・`~/.claude`（別の Claude Code）には触れない。
+- データ領域を手で丸ごと消しても壊れない（次の起動で `setup` が揃え直す）。
 
 ## 5. リポジトリごとの移行の要点
 
@@ -514,12 +628,12 @@ Node・Python）は Mac に入れておくものとし、無ければ `dev-agent
 
 | 段 | 何をするか | 終わりの印 |
 | --- | --- | --- |
-| **M0 検証スパイク（作る前に確かめる）** | (a) クラウドセッションから Mac の Remote Control セッションへ依頼が届くか（`send_message` / `ListAgents`）。(b) `claude -p` ＋ Ollama（`qwen3-coder` / `gpt-oss:20b`）で、過去の実際の CI の赤（lint・コンパイル・テスト）を何割直せるか。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする | 各項目の結果を本書の付録に書く。(b) の成績で `agent.brain` の既定を決める |
-| **M1 dev-agent の骨格＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr` と `doctor`。photogrammetry で「push → 手元ビルド → 入れ替え → `photogrammetry-cli` → 結果コメント」を 1 周 | photogrammetry の PR に `<!-- dev-agent v1 result … source=local -->` が人手ゼロで載る。push から結果まで 5 分以内 |
+| **M0 検証スパイク（作る前に確かめる）** | (a) クラウドセッションから Mac の Remote Control セッションへ依頼が届くか（`send_message` / `ListAgents`）。(b) `claude -p` ＋ Ollama（`qwen3-coder` / `gpt-oss:20b`）で、過去の実際の CI の赤（lint・コンパイル・テスト）を何割直せるか。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか | 各項目の結果を本書の付録に書く。(b) の成績で `agent.brain` の既定を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
+| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。photogrammetry で「push → 手元ビルド → 入れ替え → `photogrammetry-cli` → 結果コメント」を 1 周 | photogrammetry の PR に `<!-- dev-agent v1 result … source=local -->` が人手ゼロで載る。push から結果まで 5 分以内 |
 | **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド）と dev-agent の往復（手元のビルド）が同じ本文を投稿する。push から結果まで 10 分以内 |
-| **M3 AgentBridge** | `claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。`brain: claude` から始め、M0(b) の成績に応じて `local` を割り当てる | 実機の失敗から dev-agent が push した修正で CI が緑になる例が 1 つできる |
-| **M4 残りのアダプタ** | probe-plugin・web・ios-app。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` を持つ |
-| **M5 撤去と GUI** | 各アプリから Updater／往復の駆動を消す（第 4.9 節）。メニューバーアプリ。dev-agent 自身の自動アップデート | Vectorworks の殻の `VW_SHELL_INPUTS` から `Updater*` と `FeedbackLoop*` が消える |
+| **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。`brain: claude` から始め、M0(b) の成績に応じて `local` を割り当てる | 実機の失敗から dev-agent が push した修正で CI が緑になる例が 1 つできる。Ollama を別途入れていない Mac で `brain: local` が動く |
+| **M4 残りのアダプタ＋囲いの第 2・3 層** | probe-plugin・web・ios-app。Containerization の VM（Node / Python / Rust）と Seatbelt のプロファイル。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` を持つ。portal のビルドとテストがホストに Node を入れずに通る |
+| **M5 撤去と GUI と片付け** | 各アプリから Updater／往復の駆動を消す（第 4.9 節）。メニューバーアプリ。dev-agent 自身の自動アップデートと週 1 回の道具の版上げ PR。`uninstall` | Vectorworks の殻の `VW_SHELL_INPUTS` から `Updater*` と `FeedbackLoop*` が消える。クリーンな Mac に dev-agent を入れて `setup` だけで往復が回り、`uninstall` で残り物が無い |
 
 - 各段は「1 変更＝1 周が回る縦切り」で PR にし、Vectorworks の規約と同じく**実機確認が
   要るものは下書き PR で、ユーザーの「確認できた」を待ってからマージ**する。
@@ -537,18 +651,21 @@ Node・Python）は Mac に入れておくものとし、無ければ `dev-agent
 | 5 | Windows 版 Vectorworks | **当面対象外**（`platforms` で将来足せる形は保つ） |
 | 6 | dev-agent の言語 | **Swift**（姉妹アプリと同じ作法・CI を流用） |
 | 7 | ビルドの場所 | **往復は手元の差分ビルドで回す**。CI は最終の門と配布に残す（第 1.3・4.2・4.4 節） |
+| 2 | ローカル LLM の実行基盤 | **別途インストールせず、アプリで完結させる**。手段は同梱 Ollama（第 3.1・4.10 節）。将来 agent-mlx のエンジンで置き換える余地は残す |
+| 8 | 手元の道具 | Xcode はある。Vectorworks SDK・Node は無く、Python は既定のみ。Docker Desktop はあるが使わない。**道具は dev-agent が同梱／取り寄せでデータ領域に揃え、できる範囲で囲う**（第 4.10 節） |
+| 9 | 片付け | **データ領域を消せば元に戻る**ことを設計の要件にする（`uninstall`。第 4.10 節） |
 
 ### 決めてほしいこと（返事を待つ）
 
-2. **ローカル LLM の実行基盤。** Ollama を Mac に入れる前提でよいか（agent-mlx をサーバ化
-   しない）。
 4. **結果コメントのマーカー。** dev-agent のマーカーを 1 行目に置き、アプリ固有のマーカーを
    2 行目に残す（第 4.3 節）でよいか。クラウド側の読み方を 1 行目固定にしている箇所が
    あれば、そちらを直す。
-8. **手元のビルドの道具。** Mac に Vectorworks SDK（`VW_SDK_DIR`）・Xcode（Metal
-   ツールチェーン込み）・CMake・Node・Python が揃っている前提でよいか。無いものは
-   `dev-agent doctor` が名指しするが、揃える手順を README に書くので、現状を教えて
-   ほしい。
+10. **macOS の版。** Containerization（Linux 向けの道具の囲い）は macOS 26 以降が要る。
+    いまの Mac が 26 未満なら、第 2 層を後回しにして第 1・3 層だけで始める。
+11. **Mac のメモリ。** ローカル LLM のモデルは `doctor` が物理メモリから選ぶが、目安を
+    知りたい（`qwen3-coder` の 4bit は約 20 GB、`gpt-oss:20b` は約 14 GB）。
+12. **Claude Code の置き方。** npm 版をデータ領域に入れる案（第 3.1・4.10 節）でよいか。
+    native 版しか使えない事情が出たら `~/.local/bin` に置く妥協になる（M0(h) で確かめる）。
 
 ## 8. 用語
 
@@ -572,7 +689,11 @@ Node・Python）は Mac に入れておくものとし、無ければ `dev-agent
   [Self-hosted environments](https://code.claude.com/docs/en/self-hosted-environments) /
   [Desktop scheduled tasks](https://code.claude.com/docs/en/desktop-scheduled-tasks) /
   [Hooks](https://code.claude.com/docs/en/hooks)
-- Ollama: [Anthropic compatibility](https://docs.ollama.com/api/anthropic-compatibility)
+- Ollama: [Anthropic compatibility](https://docs.ollama.com/api/anthropic-compatibility) /
+  [リポジトリ（MIT）](https://github.com/ollama/ollama)
+- Apple: [Containerization](https://opensource.apple.com/projects/containerization/) /
+  [apple/container](https://github.com/apple/container)（1.0、macOS 26）
+- mlx-swift-lm: [リリース](https://github.com/ml-explore/mlx-swift-lm/releases)（tool calling）
 - OpenCode: [Server](https://opencode.ai/docs/server/)
 - 既存リポジトリ: `vectorworks-plugin-import-ifc-homeskz/docs/DEVELOPMENT.md`（自動
   アップデート・実機フィードバックの往復・MCP ブリッジ）、
