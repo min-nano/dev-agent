@@ -7,17 +7,19 @@
 ## 0. 要約
 
 - **クラウドエージェント（Claude Code のクラウドセッション／ルーティン）が土台を書き、
-  ローカルエージェントが実機で確かめて直す**。両者をつなぐ唯一の連絡路は **GitHub（PR の
-  ラベル・コメント・リリース・チェック）** にする。クラウドから Mac へ入ってくる口は開けない。
+  ローカルエージェントが実機で確かめて直す**。両者をつなぐ唯一の連絡路は **GitHub** にする
+  （クラウド → ローカルは PR のラベル、ローカル → クラウドは **check run**。コメント欄に
+  機械的な文を並べない）。クラウドから Mac へ入ってくる口は開けない。
 - 開発版の配布・入れ替え・実機テストの駆動・結果の投稿を、**各アプリ／プラグインから
   1 つの Mac アプリ `dev-agent` へ引き上げる**。アプリ側に残すのは「外から呼べる入口」だけ。
 - **往復のビルドは Mac で行う。** 往復 1 回にかかる時間の大半は CI のビルド（30 分超）なので、
   dev-agent は PR の head を手元の worktree で**差分ビルド**して入れ替える。CI は lint・
   clang-tidy・サニタイザ・配布物の公開という「最終の門」に残し、往復はそれを待たない。
-- ローカルエージェントの「頭脳」は新しく作らず、**Claude Code（`claude -p` と
-  Remote Control）を基本に、簡単な直しだけ Ollama 経由のローカル LLM に回す**。
-  同じハーネス（`CLAUDE.md`・hooks・permissions）が両方で効くので、頭脳を切り替えても
-  作法が変わらない。
+- ローカルエージェントの「頭脳」は新しく作らず、Claude Code のハーネスを使う。
+  **既定はローカル LLM（同梱 Ollama）で、Anthropic の Claude は昇格したときだけ**使う
+  （クラウドの使用量を守るため）。同じハーネス（`CLAUDE.md`・hooks・permissions）が両方で
+  効くので、頭脳を切り替えても作法が変わらない。代用できる範囲は M0 の計測で決め、
+  付録 B の表で育てる。
 - **リポジトリごとの「期待する動作」は、そのリポジトリの `dev-agent.yaml`（マニフェスト）に
   宣言しておき**、dev-agent が PR ごとの依頼と合わせてローカルエージェントへ渡す。
 - **環境はアプリが抱える。** ローカル LLM の実行基盤・ビルドの道具（Node・Python・
@@ -75,7 +77,9 @@
 ### 1.3 変えないこと
 
 - **GitHub 中心の流れ**（PR・CI・dev プレリリース・PR コメントによる機械可読な往復）は
-  そのまま使う。既存の `<!-- … -->` マーカー方式は実績があり、dev-agent もこれを踏襲する。
+  そのまま使う。ただし**ローカルからの結果の戻し方はコメントから check run へ変える**
+  （第 4.3 節）。既存の `<!-- … -->` マーカー付きコメントは、dev-agent へ移るまでの移行期間
+  だけ残る。
 - **CI が最終の門であること。** 手元のビルドは速いが、clang-tidy・サニタイザ付きの
   テスト・両 OS のビルド・配布物の公開は CI にしか無い。往復は手元のビルドで回し、
   **マージの可否は従来どおり CI の緑で決める**。dev プレリリースも引き続き公開する
@@ -91,12 +95,13 @@
 
 | # | 目標 | 測り方 |
 | --- | --- | --- |
-| G1 | PR に push されてから実機の結果が PR に載るまで、**人の操作ゼロ** | push → 結果コメントまでに人の操作が 0 回であること（時間の目標は G6） |
+| G1 | PR に push されてから実機の結果が PR に載るまで、**人の操作ゼロ** | push → check run の完了までに人の操作が 0 回であること（時間の目標は G6） |
 | G2 | **ビルド・テスト・lint の失敗の一次対応をローカルで閉じる** | クラウドエージェントが CI の赤に対応する回数が減る |
 | G3 | 各アプリから**アップデータと往復の駆動を撤去**し、アプリを軽くする | Vectorworks の殻の `VW_SHELL_INPUTS` が減る。Swift アプリから `*Updater` ターゲットが消える |
 | G4 | **リポジトリの種類が増えても dev-agent の本体を変えない** | 新しい種類は「アダプタ 1 つ＋マニフェスト」で足せる |
 | G5 | **止められる・絞れる・見える** | 停止の合図 1 つで全リポジトリの往復が止まる。何を入れ替え何を走らせたかが PR と GUI の両方で読める |
-| G6 | **往復が CI のビルドを待たない** | push → 手元の差分ビルド → 入れ替え → 結果コメントまでの時間（目標: Swift アプリ 5 分以内、Vectorworks プラグイン 10 分以内。初回のフルビルドを除く） |
+| G6 | **往復が CI のビルドを待たない** | push → 手元の差分ビルド → 入れ替え → check run 完了までの時間（目標: Swift アプリ 5 分以内、Vectorworks プラグイン 10 分以内。初回のフルビルドを除く） |
+| G7 | **クラウド（Anthropic）の使用量を往復で増やさない** | 往復 1 周あたりの Anthropic 側の呼び出し回数（目標: 結果の読み取りと昇格時だけ。周ごとの定型処理は 0 回）。ローカル LLM が片付けた件数の割合を付録 B で追う |
 
 ### 非目標
 
@@ -130,6 +135,7 @@
 | **Apple Containerization**（macOS 26。`container` CLI と Swift パッケージ。1.0 は 2026-06） | Linux コンテナを 1 つずつ軽量 VM で動かす。Docker Desktop 不要。Swift パッケージとしてアプリに組み込める | **採用（Linux 向けの道具のサンドボックス）** | Node・Python・Rust のように Linux でも同じに動く道具は、dev-agent が組み込んだ Containerization の VM の中で動かし、worktree だけをマウントする。イメージと VM の中身はアプリのデータ領域に置く。**macOS 26 と Apple Silicon が要る**（M0 で組み込みの可否を確かめる） |
 | **Docker Desktop**（導入済み） | Linux コンテナ | **使わない（代替は上記）** | 別途入れて保守する物が 1 つ増える。Apple Containerization が組み込めない事情が出たときの退避先として残す |
 | **Claude Code（CLI 本体）** | 頭脳の実行器。native 版は `~/.local/bin` 固定で置き場所を変えられない | **採用（npm 版をデータ領域へ入れる）** | 同梱した Node で `npm install -g --prefix <データ領域>` し、`CLAUDE_CONFIG_DIR` もデータ領域へ向ける。版は dev-agent 側で固定し（`DISABLE_AUTOUPDATER=1`）、更新は dev-agent のリリースで行う。ログイン（claude.ai の OAuth）だけはブラウザで 1 度人が行う |
+| **GitHub App（自作・個人所有）＋ Checks API** | check run（PR の Checks タブと状態欄に出る。`output.text` に長文、annotations、images）を作れるのは **GitHub App だけ**（公式: "To create a check run, you must use a GitHub App"）。PAT では作れない | **採用（結果の戻し先）** | 利用者が自分の GitHub App「dev-agent」を 1 度作り、5 リポジトリに入れる。秘密鍵は dev-agent のキーチェーンへ。dev-agent は JWT → installation token を自分で発行する（Security フレームワークの RSA 署名。依存は増えない）。投稿者が `dev-agent[bot]` になるので、人の発言と機械の出力が見分けられる。クラウドセッションの PR 購読は check suite の失敗と成功のまとめを配信するので、**結果が出た瞬間にクラウドが起きる**（コメントより相性がよい） |
 | **Tailscale / Cloudflare Tunnel / ngrok** | クラウドから Mac へ届く口を作る | **使わない** | クラウドセッションの egress は許可リスト制で、しかも Mac に口を開ける必要が無い。連絡は GitHub（ラベル・コメント・リリース）と Remote Control の外向き接続で足りる |
 
 ### 3.2 既製で賄えないもの＝dev-agent が担うもの
@@ -141,7 +147,7 @@
    どの既製品も知らない。しかも種類ごとに違う（第 4.5 節）。
 2. **リポジトリごとの期待する動作（マニフェスト）。** 何を入れ替え、どう起動し、何をもって
    合格とし、どこまで直してよいかの宣言と、それをローカルエージェントへ渡す仕組み。
-3. **往復の進行と結果の投稿。** head の更新の検知・周の管理・停止の合図・結果コメントの
+3. **往復の進行と結果の投稿。** head の更新の検知・周の管理・停止の合図・check run の
    投稿・トークンの保管。今は 4 つのリポジトリが別々に持っているものを 1 か所にする。
 
 4. **環境の抱え込み。** 道具・SDK・モデル・Claude Code をアプリのデータ領域に揃え、
@@ -157,23 +163,23 @@
 
 ```
         ┌──────────────────── GitHub（唯一の連絡路）────────────────────┐
-        │ PR（ラベル・コメント・push）  チェック・レビュー  dev プレリリース（CI）  │
+        │ PR（ラベル・push）  check run（実機の結果）  レビュー  dev プレリリース（CI） │
         └──▲────────────┬───────────────▲───────────────────▲───────────┘
            │依頼        │結果            │                   │
-           │（ラベル＋   │（コメント）    │push               │
-           │ コメント）  ▼                │                   │
+           │（ラベル）   │（check run）   │push               │
+           │            ▼                │                   │
    ┌───────┴──────────────┐      ┌───────┴───────────────────┴───────────────────┐
    │ クラウドエージェント   │      │ Mac                                            │
-   │ Claude Code クラウド   │      │  dev-agent（常駐。LLM を持たない）              │
+   │ Claude Code クラウド   │      │  dev-agent（常駐。判断する LLM を持たない）     │
    │ セッション／ルーティン │      │   ├ Watcher    : PR の head とラベルを見張る    │
    │  - 設計・実装・PR      │      │   ├ Manifest   : repo の dev-agent.yaml を読む  │
    │  - 依頼を書く          │      │   ├ Builder    : worktree で差分ビルド           │
    │  - 結果を読んで次へ    │      │   ├ Adapters   : vw-plugin / mac-app / web …    │
    └───────┬──────────────┘      │   ├ Rounds     : ビルド→入れ替え→走らせる→回収  │
-           │ Remote Control 経由の │   ├ Reporter   : 結果コメント・停止の合図        │
+           │ Remote Control 経由の │   ├ Reporter   : check run（GitHub App）         │
            │ 直接の依頼（任意）    │   └ AgentBridge: 下の 2 つへ材料を渡す           │
-           └──────────────────────┼─▶ Claude Code（Remote Control / claude -p）      │
-                                  │ └▶ Claude Code + Ollama（ローカル LLM）           │
+           └──────────────────────┼─▶ Claude Code + 同梱 Ollama（ローカル LLM。既定）│
+                                  │ └▶ Claude Code（Anthropic。昇格したときだけ）     │
                                   │                                                │
                                   │ 道具: VW SDK / Xcode / CMake / Node / Python   │
                                   │ 対象: Vectorworks 2026 / Photogrammetry.app /  │
@@ -195,20 +201,21 @@
 
 ```
  1. クラウドエージェントが PR を作る／push する（CI は従来どおり並行して走る）
- 2. クラウドエージェントが PR にラベル `dev-agent:verify` を付け、依頼コメントを書く
-      <!-- dev-agent v1 request … -->（何を確かめ、どこまで直してよいか）
+ 2. クラウドエージェントが PR にラベル `dev-agent:verify` を付ける（特に見てほしいことが
+      あれば `@dev-agent` で始まるコメントを人が読む文章で書く）
  3. dev-agent の Watcher が head の更新に気付く（60 秒ごと・ETag 付きの条件付き GET）
  4. dev-agent が PR 用の worktree を head に合わせ、head の dev-agent.yaml を読み、
       差分ビルド（Builder）→ 入れ替え →（要れば再起動）→ 起動 → 走らせる → 本文・ログ・画面を回収
       ビルドが失敗したら、そこで 1 周を終えてその失敗を結果にする
- 5. 結果を PR へ投稿する
-      <!-- dev-agent v1 result … source=local result=ok|failed -->（アプリが作った本文をそのまま載せる）
+ 5. 結果を head の check run に書く（名前 `dev-agent / <kind> (macOS)`。本文はアプリが作ったもの）
+      ビルド開始で in_progress、終わりで success / failure / neutral
  6. 失敗していて、マニフェストが直しを許していれば AgentBridge が Claude Code を起こす
       - 同じ worktree で、失敗ログ＋期待＋許した範囲を渡す
       - 直したら push せずにまず 4 を手元で回し直す（ビルド → 入れ替え → 走らせる）
       - 手元で通ったものだけ PR のブランチへ push する（CI が最終の門。周数と時間に上限）
-      - 直せなければ、試したことを結果コメントの続きに書いて止まる
- 7. クラウドエージェントが結果を読み、次の手を決める（設計変更・人へ質問・マージ待ち）
+      - 直せなければ、試したことを check run の summary に書いて failure で止まる
+ 7. クラウドエージェントが check run の失敗（または成功のまとめ）で起き、結果を読んで次の手を
+      決める（設計変更・人へ質問・マージ待ち）。周ごとに起こさず、**周が結論に達したときだけ**起こす
  8. 人は PR と dev-agent の画面で経過を見て、「確認できた」を宣言する／止める
 ```
 
@@ -220,35 +227,59 @@ github-release` を選べば従来どおり CI の成果物で回すこともで
 
 ### 4.3 連絡の書式（GitHub 上の約束）
 
-ラベル（PR に付ける。付けられるのは write 権限のある人＝本人かその代理のクラウドセッション
-だけなので、これが安全弁を兼ねる）
+**コメント欄は人（とクラウドエージェント）のもの、check run は機械のもの**、と分ける。
+dev-agent は PR にコメントを書かない。
+
+#### クラウド → ローカル: ラベル（＋任意の依頼コメント）
+
+付けられるのは write 権限のある人＝本人かその代理のクラウドセッションだけなので、
+これが安全弁を兼ねる。
 
 | ラベル | 意味 |
 | --- | --- |
-| `dev-agent:verify` | この PR の dev ビルドを実機で確かめて結果を返す（dev ビルドが更新されるたび） |
+| `dev-agent:verify` | この PR の head を実機で確かめて結果を返す（head が動くたび） |
 | `dev-agent:fix` | `verify` に加えて、マニフェストで許した範囲の直しを試みてよい |
-| `dev-agent:stop` | この PR の往復を止める（付けた時点で走っている周は最後まで行き、結果だけ投稿する） |
+| `dev-agent:stop` | この PR の往復を止める（付けた時点で走っている周は最後まで行き、結果だけ書く） |
 
-コメントの 1 行目のマーカー（既存の `homeskz-ifc-feedback` / `vw-probes-result` と同じ流儀）
+「今回は特にここを見て」「ここまでは直してよい」は、クラウドエージェントが**人が読む
+文章として** PR にコメントする（機械可読な印は要らない。dev-agent はラベルの付いた
+PR の最新のコメントのうち `@dev-agent` で始まるものを依頼として読む）。緊急停止は
+ラベルで行う（コメントの `control=stop` は廃止）。
 
-```
-<!-- dev-agent v1 request repo=<owner/repo> pr=<N> -->          … クラウド → ローカル（任意）
-<!-- dev-agent v1 result  repo=<owner/repo> pr=<N> round=<N> build=<sha7> source=local|ci platform=<macos-arm64> result=ok|failed|aborted -->
-<!-- dev-agent v1 fix     repo=<owner/repo> pr=<N> round=<N> commit=<sha7> outcome=pushed|gave-up -->
-<!-- dev-agent v1 ended   repo=<owner/repo> pr=<N> reason=<stop|closed|merged|budget> -->
-<!-- dev-agent v1 control=stop -->                               … 緊急停止（その行だけの行）
-```
+#### ローカル → クラウド: check run（GitHub App として）
 
-`source=local` の周では、ビルドが手元のものであること（CI の clang-tidy や
-サニタイザは通っていない）を本文の冒頭に 1 行書く。worktree が汚れていた（手元の直しを
-含む）場合は `build=<sha7>+dirty` にする。
+head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る。
 
-**本文はアプリが作ったものをそのまま載せる。** Vectorworks の往復なら今の
-`## 実機フィードバック round N …` 以下、プローブなら `## 実機プローブ: …` 以下がそのまま
-続く。クラウド側の「届いたコメントの読み方」（各リポジトリの `docs/DEVELOPMENT.md`）を
-書き換えずに済ませるため、**移行期間はアプリ固有のマーカー行も 2 行目に残す**（読み手は
-「`<!-- homeskz-ifc-feedback` で始まる行」を探す実装なので、1 行目でなくても拾える
-かどうかは移行時に確かめる。駄目なら dev-agent のマーカーを末尾のトレーラーにする）。
+| 項目 | 値 |
+| --- | --- |
+| `name` | `dev-agent / <kind> (macOS)`。例: `dev-agent / vectorworks-plugin (macOS)` |
+| `status` / `conclusion` | ビルド開始で `in_progress`、終わりで `success`（期待どおり）／`failure`（ビルド失敗・期待と不一致・落ちた）／`neutral`（道具が無い・停止で中断）／`skipped`（本人の PR でない等、対象外） |
+| `output.title` | 1 行の結論。例: `round 3: 柱 120/120・耐力壁 36/36・注意 0`、`ビルド失敗（clang: 2 errors）` |
+| `output.summary` | 周の表（周・build・source=local／ci・所要・ビルド・入れ替え・実行・判定）と、`expect` の各項目の○× |
+| `output.text` | **アプリが作った本文をそのまま**（Vectorworks の往復なら今の `## 実機フィードバック …` 以下、プローブなら `## 実機プローブ …` 以下）。診断ログの全文を含む。上限（65,535 文字）に収まるよう古いほうから削る |
+| `annotations` | ビルドエラー・lint をファイルと行に付ける（1 回 50 件まで、超えたら PATCH で追記） |
+| `details_url` | dev-agent の GUI でその周を開く URL スキーム（`dev-agent://round/<repo>/<pr>/<N>`） |
+
+- **同じ head で周を重ねる**（手元の直しを試しているとき）は、同じ check run を PATCH で
+  更新し、`output.text` の先頭に最新の周、以下に前の周を残す。
+- **エージェントが push したら**新しい head に新しい check run ができる。`summary` に
+  「dev-agent が round N の失敗を直して push した（commit …）」と書く。
+- **直せずに止まった**ときは `failure` にし、`summary` に試したこと・残っている失敗・
+  人かクラウドに頼みたいことを書く。これが従来の `gave-up` コメントの代わり。
+- **画面**（スクリーンショット）は check run の `images` に載せられるが、公開 URL が要る。
+  私有リポジトリでは載せられないので、画面は dev-agent のデータ領域に保存して GUI で
+  見せ、check run には枚数とパスだけ書く（公開リポジトリでも載せない。他人に見える）。
+- **プローブの結果が issue 宛て**（PR の無い main のプローブ）のときだけ、check run を
+  main の head に作ったうえで、issue にも 1 行（check run への link）をコメントする。
+  これが唯一のコメントで、理由は「issue からは check run が見えない」ため。
+
+#### クラウド側の読み方
+
+クラウドセッションは `get_check_run` で `output` を読む。各リポジトリの
+`docs/DEVELOPMENT.md`「届いたコメントの読み方」は、dev-agent へ移るときに「check run の
+読み方」へ書き換える（本文の形式は変えないので、節の中身はほぼそのまま）。PR 購読は
+check suite の失敗と成功のまとめを配信するので、**周の途中では起きず、結論が出たときに
+起きる**。これが G7（使用量）にも効く。
 
 ### 4.4 マニフェスト `dev-agent.yaml`（リポジトリごとの「期待する動作」）
 
@@ -258,7 +289,7 @@ github-release` を選べば従来どおり CI の成果物で回すこともで
 
 ```yaml
 version: 1
-name: min-nano_structure                    # 表示名。結果コメントの見出しに使う
+name: min-nano_structure                    # 表示名。check run の見出しに使う
 kind: vectorworks-plugin                    # アダプタの種類（第 4.5 節）
 platforms: [macos-arm64]                    # 今はこれだけ。windows は将来
 
@@ -306,7 +337,7 @@ round:
     - kind: screenshot                       # 任意。画面全体
     - kind: file
       path: "{tmp}/HomeskzIfcImport-diagnostic.log"
-  report: pr-comment
+  report: check-run                         # 名前は dev-agent / <kind> (macOS)
 
 expect:                                     # 人とエージェントが読む「合格の定義」
   - 全フィクスチャで取り込みが例外なく終わり、`結果:` が成功になる
@@ -315,9 +346,9 @@ expect:                                     # 人とエージェントが読む�
   - 前の周と比べて要素数が減っていない（減るのは依頼コメントが予告したときだけ）
 
 agent:                                      # 直してよい範囲
-  brain: claude                             # claude（Anthropic）| local（Ollama）| none
-  local_model: qwen3-coder
-  escalate: local -> claude                 # local で駄目なら claude（周数の範囲で）
+  brain: local                              # local（同梱 Ollama。既定）| claude（Anthropic）| none
+  local_model: auto                         # auto = doctor がメモリから選ぶ。名指しもできる
+  escalate: local -> claude:haiku -> claude # 手元の 1 周が通らなければ次へ（周数の範囲で）
   allowed: [build-error, test-failure, lint, expect-mismatch]
   forbidden_paths:
     - "src/Extensions/**"                   # 殻（再起動を強いる）
@@ -340,16 +371,16 @@ context:                                    # エージェントへ渡す追加�
 - **`agent.allowed` に無い失敗は直さない。** 設計判断・SDK の未知の挙動・殻の変更は
   クラウドと人に返す。`forbidden_paths` は各リポジトリの既存の歯止め（殻・境界・
   インストーラ）をそのまま写す。
-- **`brain` の既定は `claude`。** ローカル LLM は、M0 で成績を測ってから
-  `allowed` の一部（lint・単純なビルドエラー）に `local` を割り当てる。最初から
-  ローカル LLM に全部任せない。
+- **`brain` の既定は `local`。** ただし `allowed` の種類ごとに M0 の成績で「最初から
+  `claude`」にできる（`agent.brain_by_kind: {expect-mismatch: claude}` のように）。
+  ローカルで通らなければ `escalate` の順に昇格する。
 - **`build` は CI と同じ入口を呼ぶ。** `configure` / `command` に書くのは、各リポジトリの
   `build.yml` が呼んでいるものと同じ（`cmake` / `scripts/xcode-build.sh` /
   `swift build` ＋ `package-app.sh`）。dev-agent 専用のビルド手順を作ると「手元では
   通るが CI で落ちる」が増えるので作らない。刻印（コミット・ブランチ・チャンネル）も
   CI と同じ変数で渡し、`channel` は `dev` にする（アプリ側のアップデータが残っている間は
   それが「別のビルド」と誤認しないよう、移行期間は自動確認を切る。第 4.9 節）。
-- **スキーマの検証は dev-agent が無 SDK・無ネットワークで行い**、エラーは結果コメントに
+- **スキーマの検証は dev-agent が無 SDK・無ネットワークで行い**、エラーは check run に
   載せる（マニフェストの typo で黙って何もしない、を避ける）。
 
 ### 4.5 アダプタ（インフラの種類ごとの違い）
@@ -369,23 +400,59 @@ CMake・uv/Python・Rust・Vectorworks SDK。第 4.10 節）。Xcode と Metal �
 
 ### 4.6 ローカルエージェント（頭脳）の使い分け
 
-| 段 | 頭脳 | 向くもの | 起こし方 |
+**既定はローカル LLM で、Anthropic の Claude は昇格したときだけ。** Max プランの使用量は
+クラウドセッションと `claude -p` と Remote Control で共有されるので、往復の定型処理に
+Claude を使うと、肝心の設計・実装（クラウド）の分が減る。
+
+| 段 | 頭脳 | 向くもの | 起こし方 | 使用量 |
+| --- | --- | --- | --- | --- |
+| C（既定） | **ローカル LLM（`claude -p` ＋ 同梱 Ollama）** | 定型で量の多いもの（下の表） | `ANTHROPIC_BASE_URL=http://127.0.0.1:<専用ポート> ANTHROPIC_AUTH_TOKEN=ollama`。Ollama は使うときだけ起動し、終わったら降ろす（メモリのため） | 0 |
+| B | **Claude（`claude -p`）** | C が外した・C に向かないもの。実機の失敗ログから原因を当てて直す | AgentBridge が `escalate` に従って起こす。まず `--model haiku`、それでも駄目なら既定のモデル | 消費する |
+| A | **Claude（Remote Control）** | 対話が要るもの。クラウドの設計と実機の見え方をすり合わせる | クラウドセッションが話しかける。dev-agent は関与しない | 消費する |
+
+#### ローカル LLM に任せる仕事（候補。M0 で測って付録 B に確定する）
+
+| 仕事 | 入力 | 出力 | 見込み |
 | --- | --- | --- | --- |
-| A | **Claude（Remote Control）** | 対話が要るもの。クラウドの設計と実機の見え方をすり合わせる。画面を見ながらの調整 | Mac で `claude remote-control --spawn worktree` を常駐させ、クラウドセッションが話しかける。dev-agent は関与しない |
-| B | **Claude（`claude -p`）** | 定型だが判断の要るもの。実機の失敗ログから原因を当てて直す | dev-agent の AgentBridge が worktree で起こす。`--permission-mode acceptEdits` ＋ `--allowedTools` を `agent.allowed` から組む。`--json-schema` で「直したか・何を・なぜ」を受け取る |
-| C | **ローカル LLM（`claude -p` ＋ 同梱の Ollama）** | 単純で量の多いもの。lint・コンパイルエラーの一次対応・テストの期待値合わせ・マニフェストの `expect` との突き合わせ | B と同じコマンドに `ANTHROPIC_BASE_URL=http://127.0.0.1:<専用ポート> ANTHROPIC_AUTH_TOKEN=ollama` を付けるだけ。Ollama は dev-agent が必要なときだけ起動する。モデルは Mac のメモリから dev-agent が選ぶ（agent-mlx の `DeviceProfile` と同じ規則: 物理メモリ × 0.70 に収まる最大）。失敗したら `escalate` に従って B へ |
+| 失敗の分類 | ビルド／テスト／実機のログ | `build-error` / `test-failure` / `lint` / `expect-mismatch` / `crash` / `unknown` | 高い（分類は小さいモデルでも安定する） |
+| 結果の要約 | アプリが作った本文・診断ログ | check run の `title` と `summary`（人とクラウドが最初に読む 10 行） | 高い。**クラウドが読むトークンを減らす**効果が大きい |
+| lint・書式の直し | lint の出力 | 修正 commit | 高い |
+| 単純なコンパイルエラー | clang / swiftc のエラー 1〜3 件 | 修正 commit | 中。型の取り違え・include 漏れ・引数の数など |
+| テストの期待値合わせ | 失敗したアサーションと差分 | 修正 commit | 中。**値を合わせるだけの変更は危険**なので、`expect` に「期待値の変更は依頼があるときだけ」と書けるようにする |
+| `expect` との突き合わせ | 本文と `expect` の各項目 | ○× と根拠の行 | 中〜高 |
+| 実機の失敗の原因当て | 診断ログ・差分 | 修正 commit | 低い。B へ昇格する前提 |
 
 - **同じハーネスで走らせる**ことが要点。`CLAUDE.md`・`.claude/settings.json` の
   permissions・hooks・skills は 3 段すべてで効く。各リポジトリにある「殻を触らない」
   「`sleep` で待たない」といった規約が、ローカル LLM にもそのまま掛かる。
 - **ローカル LLM に渡す材料は dev-agent が絞る。** 失敗ログの該当部分・`expect`・
   `allowed`・直してよいファイルだけを渡す。全文脈を読ませない（小さいモデルは文脈で
-  迷う）。
-- **push 前に手元で 1 周回す。** エージェントが直したら、同じ worktree で `build` →
-  入れ替え → 走らせる、を回し、通ったものだけ push する。CI（30 分のビルド）は最終の門に
-  残る。これがクラウドでは出来ず、ローカルだからできる最大の時間短縮になる。
-- **予算で止まる。** `budget.rounds` と `budget.minutes` を超えたら `gave-up` を投稿して
+  迷う）。`--bare` で `CLAUDE.md` 以外の自動読み込みを切り、`--append-system-prompt` で
+  要るものだけ足す。
+- **昇格の規則は 1 か所**（`agent.escalate`）。C が「直せた」と言っても、手元の 1 周
+  （ビルド → 入れ替え → 走らせる）が通らなければ直せていない。通らなかったら B へ。
+  B でも通らなければ `failure` で止まる。
+- **push 前に手元で 1 周回す。** 通ったものだけ push する。CI（30 分のビルド）は最終の門に
+  残る。
+- **予算で止まる。** `budget.rounds` と `budget.minutes` を超えたら `failure` にして
   クラウドと人へ返す。無限に直し続けない。
+
+#### 16 GB の Mac での現実
+
+- 使える予算は agent-mlx の `DeviceProfile` と同じ規則で **物理メモリ × 0.70 ≒ 11 GB**。
+  `qwen3-coder`（30B-A3B、4bit で約 19 GB）と `gpt-oss:20b`（約 14 GB）は**入らない**。
+  現実的なのは **7〜9B 級の 4bit**（`qwen2.5-coder:7b` 約 4.7 GB、`qwen3:8b` 約 5.2 GB。
+  いずれも【推定】）で、12B 級（`gemma3:12b` 約 8 GB）は KV キャッシュと合わせて限界。
+  Claude Code のシステムプロンプトと `CLAUDE.md` だけで数万トークンになるので、
+  `num_ctx` は 32k 以上が要り、KV キャッシュは `OLLAMA_KV_CACHE_TYPE=q8_0` で半分にする。
+- **同時に動かさない。** ビルド（Xcode は数 GB）・Vectorworks・agent-mlx の実機確認・
+  ローカル LLM は、dev-agent が**一度に 1 つ**だけ動かす。LLM は呼び出しごとに読み込み、
+  終わったら降ろす（`keep_alive=0`。7B 級なら読み込みは数秒）。Containerization の VM は
+  必要なときだけ起こし、メモリは 2 GB に抑える。
+- **だから代用できる範囲は狭めに見積もる。** 上の表の「高い」から始め、M0 の計測で
+  「中」を 1 つずつ確かめて付録 B に書く。モデルの候補と成績は `toolchains.yaml` と
+  付録 B で版管理し、メモリを増やした Mac に入れ替えたら `doctor` が自動で大きい
+  モデルを選ぶ。
 
 ### 4.7 安全弁
 
@@ -395,16 +462,17 @@ CMake・uv/Python・Rust・Vectorworks SDK。第 4.10 節）。Xcode と Metal �
 2. **マニフェストに書けるコマンドは、アダプタの操作とリポジトリ内のスクリプトだけ。**
    任意のシェルは書けない（CI の `build.yml` と同じ信頼水準に揃える）。
 3. **エージェントは worktree で動き、`forbidden_paths` に触れない。** 触ったら push せずに
-   `gave-up`。
+   `failure` で止まる。
 4. **消すコードは増やさない。** 入れ替えで消してよいのは、dev-agent が自分で置いた
    `~/Applications/dev-agent/` 配下と、各アプリのアンインストーラが消すと決めている
    範囲だけ（Vectorworks は既存の `vw-uninstall.sh` の歯止めをそのまま使う）。
-5. **止める手段を 3 つ持つ。** ラベル `dev-agent:stop`（PR 単位）、
-   `<!-- dev-agent v1 control=stop -->`（PR 単位・既存の流儀）、dev-agent の
+5. **止める手段を 2 つ持つ。** ラベル `dev-agent:stop`（PR 単位）と、dev-agent の
    画面／CLI の「すべて止める」（Mac 単位）。
-6. **トークンは dev-agent だけが持つ。** macOS キーチェーン（service `dev-agent`）に 1 つ。
-   fine-grained PAT で、権限は Pull requests（Read/Write）・Contents（Read。Releases の
-   取得）・Metadata だけ。push はエージェントが `gh` の資格情報で行う（dev-agent の
+6. **GitHub の資格情報は dev-agent だけが持つ。** 自作の GitHub App「dev-agent」の
+   秘密鍵を macOS キーチェーン（service `dev-agent`）に 1 つ。権限は Checks（Read/Write）・
+   Pull requests（Read。ラベルとコメントを読む）・Issues（Write。プローブの issue 宛ての
+   1 行だけ）・Contents（Read。Releases の取得）・Metadata。installation token は短命で、
+   dev-agent が都度発行する。push はエージェントが `gh` の資格情報で行う（App の
    トークンでは push しない）。**各アプリからトークンの扱いが消える。**
 7. **秘密をプロンプトに載せない。** AgentBridge はトークン・鍵をエージェントの環境変数にも
    プロンプトにも渡さない。
@@ -435,6 +503,9 @@ CMake・uv/Python・Rust・Vectorworks SDK。第 4.10 節）。Xcode と Metal �
     SHA-256・同梱か取り寄せか）を読み、同梱物の展開・取り寄せ・検証・環境変数の組み立て。
   - `Sources/DevAgentSandbox/` … Containerization の VM の起動とマウント、Seatbelt の
     プロファイル生成。判断を置かない。
+  - `Sources/DevAgentGitHub/` … GitHub App の JWT（RS256。Security フレームワーク）と
+    installation token、check run の作成と更新、PR・ラベル・Releases の読み取り（ETag 付き）。
+    判断を置かない。check run の本文の組み立ては Core（純ロジック）。
   - `Sources/dev-agent/` … CLI。`setup`（道具とモデルを揃える）／`doctor`（足りない物の
     名指し）／`watch`（常駐）／`run --repo --pr`（1 周だけ）／`build --repo --pr`／
     `install --repo --build`／`stop`／`status`／`manifest check`／`uninstall`（全部消す）。
@@ -465,7 +536,9 @@ CMake・uv/Python・Rust・Vectorworks SDK。第 4.10 節）。Xcode と Metal �
 | portal | 無し（プレビューは CI が作る） | プレビュー URL のコメント（既にある）。手元の dev サーバの起動手順は README のまま | 変更なし |
 
 **CI からは何も消えない。** `build.yml` のビルド・tidy・テスト・dev プレリリースはそのまま。
-変わるのは「往復がそれを待たない」ことだけ。
+変わるのは「往復がそれを待たない」ことだけ。**クラウド側の読み方の規約**（各リポジトリの
+`docs/DEVELOPMENT.md`「届いたコメントの読み方」と `CLAUDE.md` の該当節）は、そのリポジトリが
+dev-agent へ移る PR で「check run の読み方」に書き換える。
 
 **順序は「dev-agent が同じことをできるようになってから消す」。** 消すのは M5（第 6 節）で、
 それまでは両方が動く期間を置く（dev-agent が入れ替えたビルドを、アプリ側のアップデータが
@@ -480,11 +553,11 @@ CMake・uv/Python・Rust・Vectorworks SDK。第 4.10 節）。Xcode と Metal �
 
 | もの | なぜ外か | dev-agent がすること |
 | --- | --- | --- |
-| macOS 26 以降・Apple Silicon | Containerization の前提 | `doctor` が版を見て、26 未満なら Linux 向けの道具をホストで動かす（囲いは Seatbelt だけ） |
+| macOS 26 以降・Apple Silicon（現状: **macOS 27・16 GB**） | Containerization の前提 | `doctor` が版を見て、26 未満なら Linux 向けの道具をホストで動かす（囲いは Seatbelt だけ）。メモリは第 4.6 節の予算に使う |
 | Xcode（Metal ツールチェーン込み） | 10 GB 超で再配布できない | `doctor` が `xcode-select` と Metal ツールチェーンの有無を見る。足りなければ `xcodebuild -downloadComponent MetalToolchain` を提案する |
 | Vectorworks 2026 本体 | 確かめる対象そのもの | 起動・終了だけ行う |
 | claude.ai のログイン | OAuth はブラウザで人が行う | 初回に `claude auth login` を開く。資格情報はキーチェーン |
-| GitHub のトークン | 人が発行する（fine-grained PAT） | 初回に貼り付けてもらいキーチェーンへ |
+| GitHub App「dev-agent」 | 人が 1 度作り、5 リポジトリに入れる（Checks の write が要る） | 初回に App ID と秘密鍵（.pem）を受け取りキーチェーンへ。M5 で GitHub の manifest flow（1 クリックで App を作る）に置き換える |
 | iPhone の署名証明書（任意） | Apple Developer のもの | `run-ios.sh` がキーチェーンから引く |
 
 #### アプリが抱えるもの（データ領域）
@@ -628,10 +701,10 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 
 | 段 | 何をするか | 終わりの印 |
 | --- | --- | --- |
-| **M0 検証スパイク（作る前に確かめる）** | (a) クラウドセッションから Mac の Remote Control セッションへ依頼が届くか（`send_message` / `ListAgents`）。(b) `claude -p` ＋ Ollama（`qwen3-coder` / `gpt-oss:20b`）で、過去の実際の CI の赤（lint・コンパイル・テスト）を何割直せるか。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか | 各項目の結果を本書の付録に書く。(b) の成績で `agent.brain` の既定を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
-| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。photogrammetry で「push → 手元ビルド → 入れ替え → `photogrammetry-cli` → 結果コメント」を 1 周 | photogrammetry の PR に `<!-- dev-agent v1 result … source=local -->` が人手ゼロで載る。push から結果まで 5 分以内 |
-| **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド）と dev-agent の往復（手元のビルド）が同じ本文を投稿する。push から結果まで 10 分以内 |
-| **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。`brain: claude` から始め、M0(b) の成績に応じて `local` を割り当てる | 実機の失敗から dev-agent が push した修正で CI が緑になる例が 1 つできる。Ollama を別途入れていない Mac で `brain: local` が動く |
+| **M0 検証スパイク（作る前に確かめる）** | (a) クラウドセッションから Mac の Remote Control セッションへ依頼が届くか（`send_message` / `ListAgents`）。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) 自作 GitHub App の installation token で check run を作り、`output.text` に 60 KB の本文を載せ、クラウドセッションの PR 購読がその失敗で起きるか | 各項目の結果を本書の付録に書く。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
+| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run）。photogrammetry で「push → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `dev-agent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
+| **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド。コメント）と dev-agent の往復（手元のビルド。check run）が同じ本文を出す。push から結果まで 10 分以内 |
+| **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。M0(b) の成績で「高い」と出た仕事から `local` を既定にし、昇格の規則を入れる | 実機の失敗から dev-agent が push した修正で CI が緑になる例が 1 つできる。そのうち Anthropic を呼ばずに済んだ割合を付録 B に書く |
 | **M4 残りのアダプタ＋囲いの第 2・3 層** | probe-plugin・web・ios-app。Containerization の VM（Node / Python / Rust）と Seatbelt のプロファイル。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` を持つ。portal のビルドとテストがホストに Node を入れずに通る |
 | **M5 撤去と GUI と片付け** | 各アプリから Updater／往復の駆動を消す（第 4.9 節）。メニューバーアプリ。dev-agent 自身の自動アップデートと週 1 回の道具の版上げ PR。`uninstall` | Vectorworks の殻の `VW_SHELL_INPUTS` から `Updater*` と `FeedbackLoop*` が消える。クリーンな Mac に dev-agent を入れて `setup` だけで往復が回り、`uninstall` で残り物が無い |
 
@@ -654,18 +727,20 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | 2 | ローカル LLM の実行基盤 | **別途インストールせず、アプリで完結させる**。手段は同梱 Ollama（第 3.1・4.10 節）。将来 agent-mlx のエンジンで置き換える余地は残す |
 | 8 | 手元の道具 | Xcode はある。Vectorworks SDK・Node は無く、Python は既定のみ。Docker Desktop はあるが使わない。**道具は dev-agent が同梱／取り寄せでデータ領域に揃え、できる範囲で囲う**（第 4.10 節） |
 | 9 | 片付け | **データ領域を消せば元に戻る**ことを設計の要件にする（`uninstall`。第 4.10 節） |
+| 10 | macOS の版・メモリ | **macOS 27・16 GB**。Containerization は使える。ローカル LLM は 7〜9B 級に絞り、同時に 1 つしか動かさない（第 4.6 節） |
+| 4 | 結果の戻し方 | **コメントではなく check run**（自作 GitHub App）。コメント欄に機械的な文を並べない（第 4.3 節） |
+| 11 | 頭脳の既定 | **ローカル LLM を既定にし、Claude は昇格したときだけ**。代用できる範囲は M0 の計測で詰め、付録 B で育てる（第 4.6 節・G7） |
 
 ### 決めてほしいこと（返事を待つ）
 
-4. **結果コメントのマーカー。** dev-agent のマーカーを 1 行目に置き、アプリ固有のマーカーを
-   2 行目に残す（第 4.3 節）でよいか。クラウド側の読み方を 1 行目固定にしている箇所が
-   あれば、そちらを直す。
-10. **macOS の版。** Containerization（Linux 向けの道具の囲い）は macOS 26 以降が要る。
-    いまの Mac が 26 未満なら、第 2 層を後回しにして第 1・3 層だけで始める。
-11. **Mac のメモリ。** ローカル LLM のモデルは `doctor` が物理メモリから選ぶが、目安を
-    知りたい（`qwen3-coder` の 4bit は約 20 GB、`gpt-oss:20b` は約 14 GB）。
 12. **Claude Code の置き方。** npm 版をデータ領域に入れる案（第 3.1・4.10 節）でよいか。
     native 版しか使えない事情が出たら `~/.local/bin` に置く妥協になる（M0(h) で確かめる）。
+13. **GitHub App の作成。** check run を作るには自作の GitHub App が要る。1 度だけ手で
+    作って（名前 `dev-agent`、権限は第 4.7 節）、App ID と秘密鍵を dev-agent に渡す形で
+    よいか。
+14. **check run の名前。** `dev-agent / <kind> (macOS)` でよいか。branch protection の
+    required checks に入れるかどうかも、ここで決めておきたい（入れると「実機の結果が
+    出るまでマージできない」になる。`draw/` を含む PR の規約と相性がよい）。
 
 ## 8. 用語
 
@@ -673,12 +748,12 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | --- | --- |
 | クラウドエージェント | Claude Code のクラウドセッション／ルーティン。設計・実装・PR 作成を担う |
 | ローカルエージェント | Mac で動く Claude Code（Remote Control / `claude -p`）または Claude Code＋Ollama。実機で確かめ、小さく直す |
-| dev-agent | 本リポジトリで作る Mac アプリ＋CLI。入れ替え・起動・回収・投稿を担い、LLM を持たない |
-| 周（round） | 「入れ替え → 走らせる → 結果を投稿」の 1 回。既存の `round=N` と同じ |
+| dev-agent | 本リポジトリで作る Mac アプリ＋CLI。ビルド・入れ替え・起動・回収・check run を担い、判断する LLM を持たない（同梱 Ollama は道具として起動するだけ） |
+| 周（round） | 「ビルド → 入れ替え → 走らせる → check run」の 1 回。既存の `round=N` と同じ |
 | アダプタ | インフラの種類（plugin / app / web）ごとのビルド・入れ替え・起動・回収の実装 |
 | Builder | PR ごとの worktree を保ち、マニフェストの `build` 節で差分ビルドする dev-agent の部品 |
 | マニフェスト | リポジトリ直下の `dev-agent.yaml`。期待する動作と直してよい範囲の宣言 |
-| 頭脳（brain） | ローカルエージェントが使う LLM。`claude`（Anthropic）か `local`（Ollama） |
+| 頭脳（brain） | ローカルエージェントが使う LLM。`local`（同梱 Ollama。既定）か `claude`（Anthropic。昇格時） |
 
 ## 付録 A. 参照した資料
 
@@ -705,3 +780,15 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 
 M0 の各項目の結果をここに書く。確認水準の印は SDK リファレンスの流儀に合わせる
 （無印＝実機確認済み・【推定】・【文書根拠】）。
+
+### B.1 ローカル LLM の代用範囲（M0(b)。育てていく表）
+
+| 仕事（第 4.6 節） | モデル | 件数 | 通った | 所要（中央値） | ピークメモリ | 既定にするか |
+| --- | --- | --- | --- | --- | --- | --- |
+| （未計測） | | | | | | |
+
+### B.2 手元ビルドの所要時間（M0(f)）
+
+| リポジトリ | 初回 | 差分（本体 1 ファイル） | 備考 |
+| --- | --- | --- | --- |
+| （未計測） | | | |
