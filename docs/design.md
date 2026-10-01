@@ -8,7 +8,7 @@
 
 - **クラウドエージェント（Claude Code のクラウドセッション／ルーティン）が土台を書き、
   ローカルエージェントが実機で確かめて直す**。両者をつなぐ唯一の連絡路は **GitHub** にする
-  （クラウド → ローカルは PR のラベル、ローカル → クラウドは **PR の check（Actions の job）**。コメント欄に
+  （クラウド → ローカルは PR のラベル、ローカル → クラウドは **PR の check run**。コメント欄に
   機械的な文を並べない）。クラウドから Mac へ入ってくる口は開けない。
 - 開発版の配布・入れ替え・実機テストの駆動・結果の投稿を、**各アプリ／プラグインから
   1 つの Mac アプリ `dev-agent` へ引き上げる**。アプリ側に残すのは「外から呼べる入口」だけ。
@@ -77,7 +77,7 @@
 ### 1.3 変えないこと
 
 - **GitHub 中心の流れ**（PR・CI・dev プレリリース・PR コメントによる機械可読な往復）は
-  そのまま使う。ただし**ローカルからの結果の戻し方はコメントから check（Actions の job）へ変える**
+  そのまま使う。ただし**ローカルからの結果の戻し方はコメントから check run へ変える**
   （第 4.3 節）。既存の `<!-- … -->` マーカー付きコメントは、dev-agent へ移るまでの移行期間
   だけ残る。
 - **CI が最終の門であること。** 手元のビルドは速いが、clang-tidy・サニタイザ付きの
@@ -95,12 +95,12 @@
 
 | # | 目標 | 測り方 |
 | --- | --- | --- |
-| G1 | PR に push されてから実機の結果が PR に載るまで、**人の操作ゼロ** | push → check の完了までに人の操作が 0 回であること（時間の目標は G6） |
+| G1 | PR に push されてから実機の結果が PR に載るまで、**人の操作ゼロ** | push → check run の完了までに人の操作が 0 回であること（時間の目標は G6） |
 | G2 | **ビルド・テスト・lint の失敗の一次対応をローカルで閉じる** | クラウドエージェントが CI の赤に対応する回数が減る |
 | G3 | 各アプリから**アップデータと往復の駆動を撤去**し、アプリを軽くする | Vectorworks の殻の `VW_SHELL_INPUTS` が減る。Swift アプリから `*Updater` ターゲットが消える |
 | G4 | **リポジトリの種類が増えても dev-agent の本体を変えない** | 新しい種類は「アダプタ 1 つ＋マニフェスト」で足せる |
 | G5 | **止められる・絞れる・見える** | 停止の合図 1 つで全リポジトリの往復が止まる。何を入れ替え何を走らせたかが PR と GUI の両方で読める |
-| G6 | **往復が CI のビルドを待たない** | push → 手元の差分ビルド → 入れ替え → check 完了までの時間（目標: Swift アプリ 5 分以内、Vectorworks プラグイン 10 分以内。初回のフルビルドを除く） |
+| G6 | **往復が CI のビルドを待たない** | push → 手元の差分ビルド → 入れ替え → check run 完了までの時間（目標: Swift アプリ 5 分以内、Vectorworks プラグイン 10 分以内。初回のフルビルドを除く） |
 | G7 | **クラウド（Anthropic）の使用量を往復で増やさない** | 往復 1 周あたりの Anthropic 側の呼び出し回数（目標: 結果の読み取りと昇格時だけ。周ごとの定型処理は 0 回）。ローカル LLM が片付けた件数の割合を付録 B で追う |
 
 ### 非目標
@@ -129,13 +129,14 @@
 | **Claude Code ルーティン**（クラウド。API／GitHub イベント／スケジュール） | GitHub の PR イベントや HTTP POST でクラウドセッションを起こせる。SDK リファレンスの `issue-webhook` が既に使っている | **採用（クラウド側の起点。既に使用中）** | 「dev-agent の結果が PR に載った → クラウドが読む」は、PR 購読（`subscribe_pr_activity`）とルーティンで賄える。ローカルでは走らない |
 | **Claude Code Desktop のローカル・スケジュールタスク** | Mac 上で、Desktop アプリが開いている間、最短 1 分間隔で Claude のセッションを起こせる。ローカルのファイルと道具に届く | **補助（M0 の足場）** | 何も作らずに「ローカルで Claude が PR を見に行く」を試せる。ただし毎回 LLM が起きるので**待ち受けのポーリングには向かない**（使用量を食う）。常用の監視は dev-agent が LLM 無しで行う |
 | **Claude Code セルフホスト環境** | クラウドセッションを自前のランナーで走らせる | **使えない（確定）** | Team / Enterprise 限定（公開ベータ）。本件は個人の Max プランなので対象外 |
-| **GitHub Actions のセルフホストランナー**（Mac） | PR のワークフローを Mac で走らせる。ランナーは GitHub へ**外向きのロングポーリング**で job を受け取るので、push・ラベル・コメントに**数秒で**反応する（Mac に口を開けない）。job 自体が PR のチェック（check run）になり、ログ・注釈・job summary が GitHub に残る。セルフホストは Actions の分数を消費しない。ランナー本体（actions-runner）は MIT で、データ領域に置ける | **採用（Watcher と Reporter を兼ねる）** | ポーリングで気付く・自前で check run を作る、の両方をこれ 1 つで置き換える。各リポジトリに 10 行のワークフロー `dev-agent.yml` を置き、`runs-on: [self-hosted, dev-agent]` の job が `dev-agent run` を呼ぶ。注意点は 3 つ: (1) GUI アプリ（Vectorworks）を動かすので、ランナーは**ログイン中のユーザーの launchd agent**として dev-agent が起動する、(2) **公開リポジトリ（portal）**では job に `if: head.repo == base.repo && actor == 本人` を付け、fork の PR には job を割り当てない（第 4.7 節）、(3) Mac が落ちていると job は待ち行列に残り、24 時間で失敗になる（それでよい） |
+| **GitHub Actions のセルフホストランナー**（Mac） | PR のワークフローを Mac で走らせる。外向きのロングポーリングで job を受けるので数秒で反応し、job がそのまま check になる | **不採用（全リポジトリが公開のため）** | GitHub 自身が「公開リポジトリでは使うな」としている（誰でも PR を出せ、ワークフローの `if` や承認設定の誤りがそのまま Mac での任意実行につながる）。一度は採用したが、利用者の指摘で取り下げた。リポジトリが私有になることがあれば再検討 |
 | **OpenCode / Goose / Aider / Codex CLI**（ローカル LLM 対応のコーディングエージェント） | いずれも Ollama 等で動く。OpenCode は `opencode serve` で HTTP API から駆動できる | **採用しない（当面）** | Claude Code＋Ollama で同じことができ、しかもハーネスを 1 つに保てる。Claude Code をローカル LLM で動かした成績が悪ければ、OpenCode の serve モードを第 2 候補として試す |
 | **agent-mlx（自作の MLX チャットアプリ）／mlx-swift-lm** | MLX でローカル推論。mlx-swift-lm は tool calling（`ToolCallProcessor`。qwen / json / xmlFunction 形式）を持つ | **当面は使わない（将来の置き換え候補）** | dev-agent の中に Anthropic 互換の `/v1/messages` サーバを Swift で書けば、外部ランタイム無しで「アプリで完結」できる。ただし Claude Code が使う API の細部（streaming のイベント形・thinking・`cache_control`）を自前で追い続けることになり、同梱した Ollama より保守が重い。**同梱 Ollama で始め、Ollama の同梱が重荷になったときに agent-mlx のエンジンを土台に置き換える**。agent-mlx は「dev-agent が実機で確かめる対象」の 1 つとして扱う |
 | **Apple Containerization**（macOS 26。`container` CLI と Swift パッケージ。1.0 は 2026-06） | Linux コンテナを 1 つずつ軽量 VM で動かす。Docker Desktop 不要。Swift パッケージとしてアプリに組み込める | **採用（Linux 向けの道具のサンドボックス）** | Node・Python・Rust のように Linux でも同じに動く道具は、dev-agent が組み込んだ Containerization の VM の中で動かし、worktree だけをマウントする。イメージと VM の中身はアプリのデータ領域に置く。**macOS 26 と Apple Silicon が要る**（M0 で組み込みの可否を確かめる） |
 | **Docker Desktop**（導入済み） | Linux コンテナ | **使わない（代替は上記）** | 別途入れて保守する物が 1 つ増える。Apple Containerization が組み込めない事情が出たときの退避先として残す |
 | **Claude Code（CLI 本体）** | 頭脳の実行器。native 版は `~/.local/bin` 固定で置き場所を変えられない | **採用（npm 版をデータ領域へ入れる）** | 同梱した Node で `npm install -g --prefix <データ領域>` し、`CLAUDE_CONFIG_DIR` もデータ領域へ向ける。版は dev-agent 側で固定し（`DISABLE_AUTOUPDATER=1`）、更新は dev-agent のリリースで行う。ログイン（claude.ai の OAuth）だけはブラウザで 1 度人が行う |
-| **GitHub App（自作）＋ Checks API** | check run を自前で作る。作れるのは GitHub App だけ（公式: "To create a check run, you must use a GitHub App"） | **不要（ランナーの job がそのまま check になる）** | 一度は採用したが、セルフホストランナーなら Actions が job ごとに check run を作り、GitHub App・JWT・installation token・自前の投稿コードが丸ごと要らなくなる。dev-agent が検知も投稿も自分で行う構成に戻すときの代替として残す |
+| **GitHub App（自作・個人所有）** | (1) **webhook**: PR・ラベル・コメント・push のイベントを、App に設定した 1 つの URL へ署名付き（HMAC-SHA256）で送る。(2) **Checks API**: check run（PR の Checks タブと状態欄に出る。`output.text` に長文、annotations）を作れるのは **GitHub App だけ**（公式: "To create a check run, you must use a GitHub App"） | **採用（気付きと結果の両方）** | 利用者が自分の GitHub App「DevAgent」を 1 度作り、5 リポジトリに入れる。秘密鍵と webhook secret は dev-agent のキーチェーンへ。dev-agent は JWT → installation token を自分で発行する（Security フレームワークの RSA 署名。依存は増えない）。投稿者が `devagent[bot]` になるので、人の発言と機械の出力が見分けられる。クラウドセッションの PR 購読は check suite の失敗と成功のまとめを配信するので、**結果が出た瞬間にクラウドが起きる**。webhook の届け先は次項 |
+| **webhook の中継（smee.io）** | GitHub（probot）が運用する webhook の中継。送られた webhook を、ランダムな URL のチャネルに**外向きの SSE で購読している側へ**そのまま（ヘッダごと）流す。Mac に口を開けない。無料・設定ゼロ | **採用（リアルタイムに気付く経路。真実は API で読み直す）** | App の webhook URL を smee のチャネルにし、dev-agent が SSE で待ち受ける。**中継が運ぶのは「合図」だけ**で、dev-agent は合図を受けたら GitHub API で PR・ラベル・head を読み直してから動く（中継が偽物を流しても、無駄な API 呼び出しが 1 回起きるだけ）。加えて webhook の署名を App の secret で検証する。届かない・途切れることはあるので、60 秒の ETag 付きポーリングを**取りこぼしの保険**として残す。中継を自前にしたくなったら Cloudflare Workers 等に置き換えられる（dev-agent 側は URL を変えるだけ） |
 | **Tailscale / Cloudflare Tunnel / ngrok** | クラウドから Mac へ届く口を作る | **使わない** | クラウドセッションの egress は許可リスト制で、しかも Mac に口を開ける必要が無い。連絡は GitHub（ラベル・コメント・リリース）と Remote Control の外向き接続で足りる |
 
 ### 3.2 既製で賄えないもの＝dev-agent が担うもの
@@ -147,8 +148,8 @@
    どの既製品も知らない。しかも種類ごとに違う（第 4.5 節）。
 2. **リポジトリごとの期待する動作（マニフェスト）。** 何を入れ替え、どう起動し、何をもって
    合格とし、どこまで直してよいかの宣言と、それをローカルエージェントへ渡す仕組み。
-3. **往復の進行と結果の投稿。** job の受け取り・周の管理・停止・ログと summary の
-   投稿・トークンの保管。今は 4 つのリポジトリが別々に持っているものを 1 か所にする。
+3. **往復の進行と結果の投稿。** 合図の受け取り・周の管理・停止・check run の投稿・
+   資格情報の保管。今は 4 つのリポジトリが別々に持っているものを 1 か所にする。
 
 4. **環境の抱え込み。** 道具・SDK・モデル・Claude Code をアプリのデータ領域に揃え、
    消せば戻る形に保つ（第 4.10 節）。既製のパッケージマネージャ（Homebrew 等）は
@@ -163,22 +164,22 @@
 
 ```
         ┌──────────────────── GitHub（唯一の連絡路）────────────────────┐
-        │ PR（ラベル・push）  Actions の job（＝実機の check）  レビュー  CI    │
+        │ PR（ラベル・push）  check run（実機の結果）  レビュー  CI（ビルド・配布）│
         └──▲────────────┬───────────────▲───────────────────▲───────────┘
-           │依頼        │job を配る      │ログ・注釈・summary │
-           │（ラベル）   │（ロングポーリング│                   │push
-           │            ▼ 数秒）          │                   │
+           │依頼        │webhook（合図）  │結果               │push
+           │（ラベル）   │ ↓ 中継（smee）  │（check run）      │
+           │            ▼ SSE で受ける    │                   │
    ┌───────┴──────────────┐      ┌───────┴───────────────────┴───────────────────┐
    │ クラウドエージェント   │      │ Mac                                            │
    │ Claude Code クラウド   │      │  dev-agent（常駐。判断する LLM を持たない）     │
-   │ セッション／ルーティン │      │   ├ Runner     : actions-runner を抱えて job を受ける│
-   │  - 設計・実装・PR      │      │   ├ Manifest   : repo の dev-agent.yaml を読む  │
-   │  - 依頼を書く          │      │   ├ Builder    : worktree で差分ビルド           │
-   │  - 結果を読んで次へ    │      │   ├ Adapters   : vw-plugin / mac-app / web …    │
-   └──────────────────────┘      │   ├ Rounds     : ビルド→入れ替え→走らせる→回収  │
-                                  │   ├ Reporter   : job のログ・注釈・summary       │
-   ┌──────────────────────┐      │   └ AgentBridge: 下の 2 つへ材料を渡す           │
-   │ 人（スマホ・ブラウザ） │      │                                                │
+   │ セッション／ルーティン │      │   ├ Watcher    : 合図を受け、API で読み直す     │
+   │  - 設計・実装・PR      │      │   │              （保険に 60 秒のポーリング）     │
+   │  - 依頼を書く          │      │   ├ Manifest   : repo の dev-agent.yaml を読む  │
+   │  - 結果を読んで次へ    │      │   ├ Builder    : worktree で差分ビルド           │
+   └──────────────────────┘      │   ├ Adapters   : vw-plugin / mac-app / web …    │
+                                  │   ├ Rounds     : ビルド→入れ替え→走らせる→回収  │
+   ┌──────────────────────┐      │   ├ Reporter   : check run（GitHub App）         │
+   │ 人（スマホ・ブラウザ） │      │   └ AgentBridge: 下の 2 つへ材料を渡す           │
    │  Remote Control で     ├──────┼─▶ Claude Code（人の対話用。常駐しない）         │
    │  Mac の Claude を使う  │      │ ├▶ Claude Code + 同梱 Ollama（ローカル LLM。既定）│
    └──────────────────────┘      │ └▶ Claude Code（Anthropic。昇格したときだけ）     │
@@ -190,9 +191,10 @@
 ```
 
 - **連絡路は GitHub だけ。** クラウド→ローカルの「依頼」は PR のラベル（と人が読む
-  コメント）、ローカル→クラウドの「結果」は Actions の job（＝PR の check）のログ・注釈・
-  summary。Mac はセルフホストランナーとして job を受けるので、**数秒で反応し、Mac に口は
-  開けない**。クラウドセッションは PR を購読しているので、job が終われば起きる。
+  コメント）、ローカル→クラウドの「結果」は head の check run（自作 GitHub App）。
+  気付きは App の webhook を中継（smee.io）経由で SSE で受けるので**数秒**で、Mac に口は
+  開けない。中継が運ぶのは合図だけで、真実は必ず GitHub API で読み直す。クラウド
+  セッションは PR を購読しているので、check run が結論に達すれば起きる。
 - **Remote Control は人の窓。** 人が外出先から Mac の Claude Code を使うためのもので、
   エージェント同士の経路にはしない（第 4.6 節）。
 - **dev-agent は LLM を持たない。** 見張る・ビルドする・入れ替える・走らせる・回収する・
@@ -205,22 +207,21 @@
  1. クラウドエージェントが PR を作る／push する（CI は従来どおり並行して走る）
  2. クラウドエージェントが PR にラベル `dev-agent:verify` を付ける（特に見てほしいことが
       あれば `@dev-agent` で始まるコメントを人が読む文章で書く）
- 3. ラベルが付いた PR の push（synchronize）／ラベル付け／`@dev-agent` コメントで、その
-      リポジトリの `dev-agent.yml` が job を 1 つ作る。Mac のランナーが数秒で受け取る
- 4. job が `dev-agent run --repo … --pr …` を呼ぶ。dev-agent が PR 用の worktree を head に
-      合わせ、head の dev-agent.yaml を読み、
+ 3. ラベル付け／push／`@dev-agent` コメントの webhook が中継を通って数秒で届く。dev-agent は
+      合図を受けて GitHub API で PR・ラベル・head を読み直す（届かなくても 60 秒のポーリングが拾う）
+ 4. dev-agent が PR 用の worktree を head に合わせ、head の dev-agent.yaml を読み、
       差分ビルド（Builder）→ 入れ替え →（要れば再起動）→ 起動 → 走らせる → 本文・ログ・画面を回収
       ビルドが失敗したら、そこで 1 周を終えてその失敗を結果にする
- 5. 結果を job に書く（job の名前が check の名前 `DevAgent / <kind> (macOS)`）。
-      ログに本文の全文、注釈に 1 行の結論、job summary に周の表。job の成否が check の成否
+ 5. 結果を head の check run に書く（名前 `DevAgent / <kind> (macOS)`。本文はアプリが作ったもの）
+      ビルド開始で in_progress、終わりで success / failure / neutral
  6. 失敗していて、マニフェストが直しを許していれば AgentBridge が Claude Code を起こす
       - 同じ worktree で、失敗ログ＋期待＋許した範囲を渡す
       - 直したら push せずにまず 4 を手元で回し直す（ビルド → 入れ替え → 走らせる）
       - 手元で通ったものだけ PR のブランチへ push する（CI が最終の門。周数と時間に上限）
-      - 直せなければ、試したことを job の summary に書いて失敗で止まる
- 7. クラウドエージェントが check の失敗（または成功のまとめ）で起き、`get_job_logs` で結果を
-      読んで次の手を決める（設計変更・人へ質問・マージ待ち）。周ごとに起こさず、
-      **job が終わったときだけ**起きる
+      - 直せなければ、試したことを check run の summary に書いて failure で止まる
+ 7. クラウドエージェントが check run の失敗（または成功のまとめ）で起き、`get_check_run` で
+      結果を読んで次の手を決める（設計変更・人へ質問・マージ待ち）。周ごとに起こさず、
+      **周が結論に達したときだけ**起きる
  8. 人は PR と dev-agent の画面で経過を見て、「確認できた」を宣言する／止める
 ```
 
@@ -232,8 +233,8 @@ github-release` を選べば従来どおり CI の成果物で回すこともで
 
 ### 4.3 連絡の書式（GitHub 上の約束）
 
-**コメント欄は人（とクラウドエージェント）のもの、check（Actions の job）は機械のもの**、と
-分ける。dev-agent は PR にコメントを書かない。
+**コメント欄は人（とクラウドエージェント）のもの、check run は機械のもの**、と分ける。
+dev-agent は PR にコメントを書かない。
 
 #### クラウド → ローカル: ラベル（＋任意の依頼コメント）
 
@@ -244,63 +245,66 @@ github-release` を選べば従来どおり CI の成果物で回すこともで
 | --- | --- |
 | `dev-agent:verify` | この PR の head を実機で確かめて結果を返す（head が動くたび） |
 | `dev-agent:fix` | `verify` に加えて、マニフェストで許した範囲の直しを試みてよい |
-| `dev-agent:stop` | この PR の往復を止める（走っている job は取り消す） |
+| `dev-agent:stop` | この PR の往復を止める（走っている周は安全な区切りで打ち切り、`neutral` で結果だけ書く） |
 
 「今回は特にここを見て」「ここまでは直してよい」は、クラウドエージェントが**人が読む
-文章として** PR にコメントする（`@dev-agent` で始める。dev-agent は job の中で、ラベルの
-付いた PR の `@dev-agent` コメントのうち最新のものを依頼として読む）。
+文章として** PR にコメントする（機械可読な印は要らない。dev-agent はラベルの付いた
+PR の最新のコメントのうち `@dev-agent` で始まるものを依頼として読む）。緊急停止も
+ラベルで行う（コメントの `control=stop` は廃止）。
 
-#### ローカル → クラウド: Actions の job（セルフホストランナーが走らせる）
+#### 気付き方: webhook → 中継 → SSE（保険にポーリング）
 
-各リポジトリに置くワークフローは 1 つで、中身は dev-agent リポジトリの再利用ワーク
-フローを呼ぶだけ（版の管理を 1 か所にする）。
+| 経路 | 役目 | 決めごと |
+| --- | --- | --- |
+| GitHub App の webhook → smee.io のチャネル → dev-agent が SSE で購読 | **数秒で気付く** | 購読するイベントは `pull_request`（labeled / unlabeled / synchronize / reopened / closed）・`issue_comment`（created）・`release`（published。CI の成果物で回すとき）。dev-agent は署名（`X-Hub-Signature-256`）を App の secret で検証し、**本文は使わず、合図として PR 番号だけ取り出して API で読み直す**。中継の URL はキーチェーン |
+| 60 秒ごとの `If-None-Match`（ETag）付きポーリング | **取りこぼしの保険** | 304 は上限に数えられない。5 リポジトリでも認証付きの 5,000 回/時に遠く届かない。中継が落ちていても往復は止まらず、遅くなるだけ |
 
-```yaml
-# .github/workflows/dev-agent.yml（各リポジトリ。これだけ）
-name: DevAgent
-on:
-  pull_request:
-    types: [labeled, synchronize, reopened]
-  issue_comment:
-    types: [created]          # @dev-agent の依頼
-jobs:
-  round:
-    uses: min-nano/dev-agent/.github/workflows/round.yml@main
-    with:
-      kind: vectorworks-plugin
-```
+中継は「公開リポジトリの公開イベントを、公開の中継サービスで Mac へ流す」だけなので、
+秘密は通らない。偽の合図が来ても API で読み直すので動作は変わらず、署名の検証で
+そもそも捨てる。
 
-再利用ワークフロー（`round.yml`）側が持つ決めごと:
+#### ローカル → クラウド: check run（GitHub App として。自前で投稿する）
+
+head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る。
 
 | 項目 | 値 |
 | --- | --- |
-| job の名前（＝check の名前） | **`DevAgent / <kind> (macOS)`**。例: `DevAgent / vectorworks-plugin (macOS)` |
-| `runs-on` | `[self-hosted, macOS, dev-agent]`。ランナーは dev-agent が抱える（第 4.10 節） |
-| 走る条件（job の `if`） | ラベル `dev-agent:verify` か `dev-agent:fix` が付いている **かつ** head のリポジトリが base と同じ（fork でない）**かつ** 作者が本人。満たさなければ job は作られず、ランナーに届かない |
-| 並び | `concurrency: dev-agent-<repo>-<pr>` で PR ごとに 1 本。`dev-agent:stop` のラベル付けは同じグループの job を `cancel-in-progress: true` で起こして走っているものを取り消し、自分は何もせず終わる。Mac 全体では、ランナーが 1 本しか job を取らないので自然に直列になる |
-| 本文（アプリが作ったもの全文・診断ログ） | **job のログ**に `===== BEGIN DEVAGENT ROUND … =====` 〜 `===== END … =====` で挟んで出す（SDK リファレンスの `ci-debug` と同じ流儀。クラウドは `get_job_logs` で読む） |
-| 1 行の結論 | `::notice::`（check run の注釈。`round 3: 柱 120/120・耐力壁 36/36・注意 0`）。ビルドエラー・lint は `::error file=…,line=…::` でファイルと行に付く |
-| 周の表 | `$GITHUB_STEP_SUMMARY`（人が GitHub の画面で読む。周・build・source=local／ci・所要・`expect` の○×） |
-| 成否 | 期待どおり→成功。ビルド失敗・期待と不一致・落ちた→失敗。道具が無い・停止→`exit 78`（neutral） |
-| 画面（スクリーンショット） | job の artifact として上げる（人は GitHub から落とせる。クラウドは読まない）。dev-agent の GUI でも見られる |
-| 直せずに止まった | 失敗で終え、summary に試したこと・残っている失敗・人かクラウドに頼みたいことを書く |
-| エージェントが push した | 新しい head に新しい job ができる。summary に「round N の失敗を直して push した（commit …）」 |
+| `name` | **`DevAgent / <kind> (macOS)`**。例: `DevAgent / vectorworks-plugin (macOS)` |
+| `status` / `conclusion` | ビルド開始で `in_progress`、終わりで `success`（期待どおり）／`failure`（ビルド失敗・期待と不一致・落ちた）／`neutral`（道具が無い・停止で中断）／`skipped`（本人の PR でない等、対象外） |
+| `output.title` | 1 行の結論。例: `round 3: 柱 120/120・耐力壁 36/36・注意 0`、`ビルド失敗（clang: 2 errors）` |
+| `output.summary` | 周の表（周・build・source=local／ci・所要・ビルド・入れ替え・実行・判定）と、`expect` の各項目の○× |
+| `output.text` | **アプリが作った本文をそのまま**（Vectorworks の往復なら今の `## 実機フィードバック …` 以下、プローブなら `## 実機プローブ …` 以下）。診断ログの全文を含む。上限（65,535 文字）に収まるよう古いほうから削る |
+| `annotations` | ビルドエラー・lint をファイルと行に付ける（1 回 50 件まで、超えたら PATCH で追記） |
+| `details_url` | dev-agent の GUI でその周を開く URL スキーム（`dev-agent://round/<repo>/<pr>/<N>`） |
 
-- **1 つの job が 1 周**。手元の直しを試して同じ head で周を重ねるときは、同じ job の
-  中で続け、ログに周の区切りを出す。
-- **プローブの結果が issue 宛て**（PR の無い main のプローブ）のときは、`workflow_dispatch`
-  で走らせ、issue に 1 行（job への link）だけコメントする。これが唯一のコメントで、理由は
-  「issue からは job が見えない」ため。
+- **同じ head で周を重ねる**（手元の直しを試しているとき）は、同じ check run を PATCH で
+  更新し、`output.text` の先頭に最新の周、以下に前の周を残す。
+- **エージェントが push したら**新しい head に新しい check run ができる。`summary` に
+  「dev-agent が round N の失敗を直して push した（commit …）」と書く。
+- **直せずに止まった**ときは `failure` にし、`summary` に試したこと・残っている失敗・
+  人かクラウドに頼みたいことを書く。これが従来の `gave-up` コメントの代わり。
+- **画面**（スクリーンショット）は check run の `images` に載せられるが、公開 URL が要る。
+  私有リポジトリでは載せられないので、画面は dev-agent のデータ領域に保存して GUI で
+  見せ、check run には枚数とパスだけ書く（公開リポジトリでも載せない。他人に見える）。
+- **プローブの結果が issue 宛て**（PR の無い main のプローブ）のときだけ、check run を
+  main の head に作ったうえで、issue にも 1 行（check run への link）をコメントする。
+  これが唯一のコメントで、理由は「issue からは check run が見えない」ため。
+
 - **required checks には入れない**（決定。Mac が落ちていると全 PR が止まるため）。
   `draw/` を含む PR をユーザーの「確認できた」まで待つ規約は、人の運用のまま。
+- **セルフホストランナーは使わない。** 全リポジトリが公開で、GitHub 自身が公開
+  リポジトリでのセルフホストランナーを勧めていない（PR を出せる誰もが Mac で任意の
+  コードを走らせる口になりうる）。上の経路は、GitHub から Mac へ**入るものが「合図」
+  だけ**で、実行の判断（本人の PR か・ラベルがあるか・head は何か）を dev-agent が API で
+  読み直して行う点が違う。
 
 #### クラウド側の読み方
 
-クラウドセッションは失敗の通知で起き、`get_job_logs` で BEGIN／END の間を読む。各リポジトリの
-`docs/DEVELOPMENT.md`「届いたコメントの読み方」は、そのリポジトリが dev-agent へ移る PR で
-「DevAgent の job の読み方」に書き換える（本文の形式は変えないので、節の中身はほぼ
-そのまま）。PR 購読は check suite の失敗と成功のまとめを配信するので、**周の途中では起きず、
-job が終わったときに起きる**。これが G7（使用量）にも効く。
+クラウドセッションは `get_check_run` で `output` を読む。各リポジトリの
+`docs/DEVELOPMENT.md`「届いたコメントの読み方」は、dev-agent へ移るときに「check run の
+読み方」へ書き換える（本文の形式は変えないので、節の中身はほぼそのまま）。PR 購読は
+check suite の失敗と成功のまとめを配信するので、**周の途中では起きず、結論が出たときに
+起きる**。これが G7（使用量）にも効く。
 
 ### 4.4 マニフェスト `dev-agent.yaml`（リポジトリごとの「期待する動作」）
 
@@ -310,7 +314,7 @@ job が終わったときに起きる**。これが G7（使用量）にも効�
 
 ```yaml
 version: 1
-name: min-nano_structure                    # 表示名。summary の見出しに使う
+name: min-nano_structure                    # 表示名。check run の見出しに使う
 kind: vectorworks-plugin                    # アダプタの種類（第 4.5 節）
 platforms: [macos-arm64]                    # 今はこれだけ。windows は将来
 
@@ -401,7 +405,7 @@ context:                                    # エージェントへ渡す追加�
   通るが CI で落ちる」が増えるので作らない。刻印（コミット・ブランチ・チャンネル）も
   CI と同じ変数で渡し、`channel` は `dev` にする（アプリ側のアップデータが残っている間は
   それが「別のビルド」と誤認しないよう、移行期間は自動確認を切る。第 4.9 節）。
-- **スキーマの検証は dev-agent が無 SDK・無ネットワークで行い**、エラーは job の失敗として
+- **スキーマの検証は dev-agent が無 SDK・無ネットワークで行い**、エラーは check run に
   載せる（マニフェストの typo で黙って何もしない、を避ける）。
 
 ### 4.5 アダプタ（インフラの種類ごとの違い）
@@ -435,7 +439,7 @@ Claude を使うと、肝心の設計・実装（クラウド）の分が減る�
 | 仕事 | 入力 | 出力 | 見込み |
 | --- | --- | --- | --- |
 | 失敗の分類 | ビルド／テスト／実機のログ | `build-error` / `test-failure` / `lint` / `expect-mismatch` / `crash` / `unknown` | 高い（分類は小さいモデルでも安定する） |
-| 結果の要約 | アプリが作った本文・診断ログ | `::notice::` の 1 行と summary の 10 行（人とクラウドが最初に読む） | 高い。**クラウドが読むトークンを減らす**効果が大きい |
+| 結果の要約 | アプリが作った本文・診断ログ | check run の `title` と `summary`（人とクラウドが最初に読む 10 行） | 高い。**クラウドが読むトークンを減らす**効果が大きい |
 | lint・書式の直し | lint の出力 | 修正 commit | 高い |
 | 単純なコンパイルエラー | clang / swiftc のエラー 1〜3 件 | 修正 commit | 中。型の取り違え・include 漏れ・引数の数など |
 | テストの期待値合わせ | 失敗したアサーションと差分 | 修正 commit | 中。**値を合わせるだけの変更は危険**なので、`expect` に「期待値の変更は依頼があるときだけ」と書けるようにする |
@@ -463,7 +467,7 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
 操作する窓」である。技術的にはクラウドセッションからも話しかけられるが、**この設計では
 クラウドエージェントがローカルへ依頼する経路には使わない**。理由は 3 つ。
 
-1. **記録が PR に残らない。** 往復の記録は job のログと summary に集めると決めた。
+1. **記録が PR に残らない。** 往復の記録は check run に集めると決めた。
    Remote Control 経由の依頼はセッションの中だけで完結し、人もクラウドも後から追えない。
 2. **マニフェストの歯止めが効かない。** `allowed` / `forbidden_paths` / `budget` は
    dev-agent の AgentBridge が掛けるもので、Remote Control のセッションは素の Claude Code
@@ -499,12 +503,10 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
 ### 4.7 安全弁
 
 1. **対象は本人の PR だけ。** PR の作者が自分（またはクラウドセッションが自分の名義で
-   作ったもの）で、fork からでないものに限る。この条件は**再利用ワークフローの job の
-   `if`** に書き、満たさない PR には job 自体を作らない（ランナーに届かない）。ラベルは
-   write 権限が無いと付けられないので二重の門になる。**公開リポジトリ（portal）では
-   さらに、Actions の設定で「外部の協力者の実行は承認が要る」を有効にする。**
-   `pull_request` イベントは base 側のワークフロー定義で走るので、fork が `if` を
-   書き換えることはできない。
+   作ったもの）で、fork からでないものに限る。**全リポジトリが公開**なので、この判定は
+   webhook の本文を信じず、dev-agent が GitHub API で読み直した PR の `user` と
+   `head.repo` で行う。ラベルは write 権限が無いと付けられないので二重の門になる。
+   他人の PR は、ラベルが付いていても（付けられないはずだが）動かさない。
 2. **マニフェストに書けるコマンドは、アダプタの操作とリポジトリ内のスクリプトだけ。**
    任意のシェルは書けない（CI の `build.yml` と同じ信頼水準に揃える）。
 3. **エージェントは worktree で動き、`forbidden_paths` に触れない。** 触ったら push せずに
@@ -514,12 +516,13 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
    範囲だけ（Vectorworks は既存の `vw-uninstall.sh` の歯止めをそのまま使う）。
 5. **止める手段を 2 つ持つ。** ラベル `dev-agent:stop`（PR 単位）と、dev-agent の
    画面／CLI の「すべて止める」（Mac 単位）。
-6. **GitHub の資格情報は job の `GITHUB_TOKEN` だけ。** job の中の dev-agent は、Actions が
-   job ごとに発行する短命の `GITHUB_TOKEN` で PR・ラベル・コメント・Releases を読み、
-   artifact を上げる。長期のトークンを dev-agent が持つのは**ランナーの登録のときだけ**
-   （`gh` の資格情報で登録トークンを 1 度取り、以後ランナー自身の資格情報が自動で
-   更新される）。push はエージェントが `gh` の資格情報で行う。**各アプリからトークンの
-   扱いが消える。**
+6. **GitHub の資格情報は dev-agent だけが持つ。** 自作の GitHub App「DevAgent」の
+   秘密鍵と webhook secret を macOS キーチェーン（service `dev-agent`）に。権限は
+   Checks（Read/Write）・Pull requests（Read。ラベルとコメントを読む）・Issues（Write。
+   プローブの issue 宛ての 1 行だけ）・Contents（Read。Releases の取得）・Metadata。
+   installation token は短命で、dev-agent が都度発行する。push はエージェントが `gh` の
+   資格情報で行う（App のトークンでは push しない）。**各アプリからトークンの扱いが
+   消える。**
 7. **秘密をプロンプトに載せない。** AgentBridge はトークン・鍵をエージェントの環境変数にも
    プロンプトにも渡さない。
 8. **ビルドと実行は囲いの中で。** Linux で動く道具は Containerization の VM（worktree だけ
@@ -549,16 +552,17 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
     SHA-256・同梱か取り寄せか）を読み、同梱物の展開・取り寄せ・検証・環境変数の組み立て。
   - `Sources/DevAgentSandbox/` … Containerization の VM の起動とマウント、Seatbelt の
     プロファイル生成。判断を置かない。
-  - `Sources/DevAgentRunner/` … actions-runner の取り寄せ・登録（リポジトリごと）・
-    launchd agent としての起動と監視・自己更新の追従。judgment を置かない。
-  - `Sources/DevAgentGitHub/` … job の `GITHUB_TOKEN` で PR・ラベル・コメント・Releases を
-    読む薄い層と、ログ・注釈・summary への書き出し。判断を置かない。本文の組み立ては
+  - `Sources/DevAgentGitHub/` … GitHub App の JWT（RS256。Security フレームワーク）と
+    installation token、check run の作成と更新、PR・ラベル・コメント・Releases の読み取り
+    （ETag 付き）、webhook の署名検証。判断を置かない。check run の本文の組み立ては
     Core（純ロジック）。
-  - `Sources/dev-agent/` … CLI。`setup`（道具とモデルを揃え、ランナーを登録する）／
-    `doctor`（足りない物の名指し）／`run --repo --pr`（1 周。job から呼ばれる）／
-    `build --repo --pr`／`install --repo --build`／`rc`（人のための Remote Control）／
-    `stop`（Mac 全体）／`status`／`manifest check`／`uninstall`（全部消す）。
-    ランナーが launchd agent として常駐し、`run` を呼ぶ。
+  - `Sources/DevAgentWatch/` … 中継（smee.io）への SSE 購読と、保険のポーリングの時計。
+    受けた合図を「この PR を読み直せ」に落とすだけで、判断を置かない。
+  - `Sources/dev-agent/` … CLI。`setup`（道具とモデルを揃え、App の鍵と中継を設定する）／
+    `doctor`（足りない物の名指し）／`watch`（常駐。合図を受けて `run` を回す）／
+    `run --repo --pr`（1 周だけ）／`build --repo --pr`／`install --repo --build`／
+    `rc`（人のための Remote Control）／`stop`（Mac 全体）／`status`／`manifest check`／
+    `uninstall`（全部消す）。launchd で `watch` を常駐。
   - `Apps/DevAgentApp/` … メニューバーアプリ。一覧（repo × PR × 周）・ログ・停止・
     「このビルドを入れる」。判断を持たない。
 - **既存コードの流用**: `UpdateFeed`（Releases → チャンネル）はそのまま Core へ移す。
@@ -572,9 +576,8 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
   （周・最後に見た head・最後に投稿した時刻・予算の消費）。ビルドの中間物は
   `~/Library/Caches/dev-agent/`（消えても作り直せるもの）。Vectorworks の
   `feedback.txt` と同じ役目をここへ移す。
-- **気付き方**: セルフホストランナーのロングポーリング（GitHub 側の仕組み。数秒）。
-  dev-agent 自身は GitHub をポーリングしない。ランナーが無い・登録できないときの退避として
-  `dev-agent poll`（60 秒ごと・ETag 付き）を M4 で足すかは、要るようになってから決める。
+- **気付き方**: App の webhook → smee.io → SSE（数秒）＋ 60 秒の ETag 付きポーリング
+  （保険）。第 4.3 節。
 
 ### 4.9 各アプリに何が残り、何が消えるか
 
@@ -588,7 +591,7 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
 **CI からは何も消えない。** `build.yml` のビルド・tidy・テスト・dev プレリリースはそのまま。
 変わるのは「往復がそれを待たない」ことだけ。**クラウド側の読み方の規約**（各リポジトリの
 `docs/DEVELOPMENT.md`「届いたコメントの読み方」と `CLAUDE.md` の該当節）は、そのリポジトリが
-dev-agent へ移る PR で「DevAgent の job の読み方」に書き換える。
+dev-agent へ移る PR で「DevAgent の check run の読み方」に書き換える。
 
 **順序は「dev-agent が同じことをできるようになってから消す」。** 消すのは M5（第 6 節）で、
 それまでは両方が動く期間を置く（dev-agent が入れ替えたビルドを、アプリ側のアップデータが
@@ -607,7 +610,7 @@ dev-agent へ移る PR で「DevAgent の job の読み方」に書き換える�
 | Xcode（Metal ツールチェーン込み） | 10 GB 超で再配布できない | `doctor` が `xcode-select` と Metal ツールチェーンの有無を見る。足りなければ `xcodebuild -downloadComponent MetalToolchain` を提案する |
 | Vectorworks 2026 本体 | 確かめる対象そのもの | 起動・終了だけ行う |
 | claude.ai のログイン | OAuth はブラウザで人が行う | 初回に `claude auth login` を開く。資格情報はキーチェーン |
-| ランナーの登録 | リポジトリごとに登録トークンが要る（本人の `gh` で取る） | `setup` が `gh auth token` で 5 リポジトリに登録する（ラベル `dev-agent`）。以後の資格情報の更新はランナーが自分で行う |
+| GitHub App「DevAgent」 | 人が 1 度作り、5 リポジトリに入れる（Checks の write と webhook が要る） | 初回に App ID・秘密鍵（.pem）・webhook secret を受け取りキーチェーンへ。webhook URL は `setup` が作った smee のチャネル。M5 で GitHub の manifest flow（1 クリックで App を作る）に置き換える |
 | iPhone の署名証明書（任意） | Apple Developer のもの | `run-ios.sh` がキーチェーンから引く |
 
 #### アプリが抱えるもの（データ領域）
@@ -656,7 +659,6 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | ローカル LLM のモデル | 取り寄せ（同梱 Ollama が pull） | 数十 GB。Mac のメモリに合わせて `doctor` が選ぶ |
 | Linux のコンテナイメージ | 取り寄せ（Containerization が pull） | Node / Python / Rust の Linux 版。worktree をマウントして使う |
 | Playwright のブラウザ | 取り寄せ（Node 側） | `PLAYWRIGHT_BROWSERS_PATH` をデータ領域へ |
-| actions-runner | 取り寄せ | MIT。GitHub が版の新しさを要求し自己更新するので、同梱せずデータ領域に置く（`toolchains.lock` に版を記録） |
 
 **版の更新は dev-agent のリリースで行う。** 週 1 回のワークフローが表の版と SHA-256 を
 上げる PR を立てる（SDK リファレンスの `sdk-index` と同じ流儀）。利用者側は dev-agent の
@@ -752,9 +754,9 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 
 | 段 | 何をするか | 終わりの印 |
 | --- | --- | --- |
-| **M0 検証スパイク（作る前に確かめる）** | (a) セルフホストランナーをデータ領域から launchd agent として起動し、job から `open -a "Vectorworks 2026"` と `xcodebuild` が**ログイン中のユーザーの画面で**動くか（GUI と Metal が使えるか）。push から job 開始までの秒数も測る。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) job のログに 60 KB の本文を BEGIN／END で出し、クラウドセッションが `get_job_logs` で読めるか・失敗の通知で起きるか。`::notice::` と summary の見え方も確かめる | 各項目の結果を本書の付録に書く。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
-| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。Runner（登録・launchd）と再利用ワークフロー `round.yml`。photogrammetry に `dev-agent.yml` を置き、「push → job → 手元ビルド → 入れ替え → `photogrammetry-cli` → ログ・注釈・summary」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check が人手ゼロで付く。push から結果まで 5 分以内 |
-| **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド。コメント）と dev-agent の往復（手元のビルド。job のログ）が同じ本文を出す。push から結果まで 10 分以内 |
+| **M0 検証スパイク（作る前に確かめる）** | (a) GitHub App の webhook → smee.io → SSE で、ラベル付けから dev-agent が気付くまでの秒数と、1 日の取りこぼし率（ポーリングが拾った件数）を測る。launchd agent から `open -a "Vectorworks 2026"` と `xcodebuild` が**ログイン中のユーザーの画面で**動くか（GUI と Metal が使えるか）も確かめる。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) 自作 GitHub App の installation token で check run を作り、`output.text` に 60 KB の本文を載せ、クラウドセッションの PR 購読がその失敗で起きるか・`get_check_run` で読めるか | 各項目の結果を本書の付録に書く。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
+| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run・webhook と中継・保険のポーリング）。photogrammetry で「push → 合図 → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
+| **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド。コメント）と dev-agent の往復（手元のビルド。check run）が同じ本文を出す。push から結果まで 10 分以内 |
 | **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。M0(b) の成績で「高い」と出た仕事から `local` を既定にし、昇格の規則を入れる | 実機の失敗から dev-agent が push した修正で CI が緑になる例が 1 つできる。そのうち Anthropic を呼ばずに済んだ割合を付録 B に書く |
 | **M4 残りのアダプタ＋囲いの第 2・3 層** | probe-plugin・web・ios-app。Containerization の VM（Node / Python / Rust）と Seatbelt のプロファイル。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` を持つ。portal のビルドとテストがホストに Node を入れずに通る |
 | **M5 撤去と GUI と片付け** | 各アプリから Updater／往復の駆動を消す（第 4.9 節）。メニューバーアプリ。dev-agent 自身の自動アップデートと週 1 回の道具の版上げ PR。`uninstall` | Vectorworks の殻の `VW_SHELL_INPUTS` から `Updater*` と `FeedbackLoop*` が消える。クリーンな Mac に dev-agent を入れて `setup` だけで往復が回り、`uninstall` で残り物が無い |
@@ -779,22 +781,19 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | 8 | 手元の道具 | Xcode はある。Vectorworks SDK・Node は無く、Python は既定のみ。Docker Desktop はあるが使わない。**道具は dev-agent が同梱／取り寄せでデータ領域に揃え、できる範囲で囲う**（第 4.10 節） |
 | 9 | 片付け | **データ領域を消せば元に戻る**ことを設計の要件にする（`uninstall`。第 4.10 節） |
 | 10 | macOS の版・メモリ | **macOS 27・16 GB**。Containerization は使える。ローカル LLM は 7〜9B 級に絞り、同時に 1 つしか動かさない（第 4.6 節） |
-| 4 | 結果の戻し方 | **コメントではなく check**。コメント欄に機械的な文を並べない（第 4.3 節）。手段は GitHub App の check run から**セルフホストランナーの job**に変えた（下記 15。App は不要になる） |
+| 4 | 結果の戻し方 | **コメントではなく check run**（自作 GitHub App）。コメント欄に機械的な文を並べない（第 4.3 節） |
 | 12 | Claude Code の置き方 | **npm 版をデータ領域へ**（第 3.1・4.10 節） |
-| 13 | GitHub App | 作成は了承されたが、**15 のとおりランナーで置き換えれば不要**。15 が否なら作る |
+| 13 | GitHub App | **作る**（名前 `DevAgent`。check run と webhook の両方に使う） |
 | 14 | check の名前 | **`DevAgent / <kind> (macOS)`**。required checks には**入れない** |
+| 15 | 気付き方 | セルフホストランナーは**全リポジトリが公開なので使わない**。App の webhook を smee.io で中継して SSE で受け（数秒）、60 秒のポーリングを保険にする。中継は合図だけを運び、真実は API で読み直す（第 4.3 節） |
 | 11 | 頭脳の既定 | **ローカル LLM を既定にし、Claude は昇格したときだけ**。代用できる範囲は M0 の計測で詰め、付録 B で育てる（第 4.6 節・G7） |
 
 ### 決めてほしいこと（返事を待つ）
 
-15. **気付き方を「セルフホストランナー」にしてよいか。** 自前のポーリング（60 秒）と
-    GitHub App の check run を、GitHub Actions のセルフホストランナー 1 つで置き換える案
-    （第 3.1・4.3 節）。ランナーは外向きのロングポーリングで job を受けるので**数秒で
-    反応し**、Mac に口を開けず、job がそのまま PR の check になり、GitHub App も JWT も
-    自前の投稿コードも要らなくなる。代わりに各リポジトリへ 10 行のワークフローを置き、
-    ランナー（actions-runner。MIT）をデータ領域に抱える。公開リポジトリ（portal）の
-    扱いは第 4.7 節 1 のとおり。**これを推す。** 否なら、GitHub App（13）＋ポーリングの
-    構成に戻す。
+17. **webhook の中継に smee.io を使ってよいか。** GitHub（probot）が運用する無料の
+    中継で、設定ゼロで使える。運ぶのは公開イベントの合図だけで、署名を検証し、真実は
+    API で読み直すので、中継の信頼に依存しない（落ちれば 60 秒のポーリングに戻るだけ）。
+    自前の中継（Cloudflare Workers 等）にしたくなったら URL を変えるだけで移れる。
 16. **Remote Control の位置付け。** 「人の窓であって、エージェント間の経路にはしない」
     （第 4.6 節）でよいか。クラウドエージェントがローカルへ依頼する経路はラベルだけに
     し、dev-agent は Remote Control のサーバを常駐させない。
@@ -805,14 +804,14 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | --- | --- |
 | クラウドエージェント | Claude Code のクラウドセッション／ルーティン。設計・実装・PR 作成を担う |
 | ローカルエージェント | Mac で動く Claude Code（Remote Control / `claude -p`）または Claude Code＋Ollama。実機で確かめ、小さく直す |
-| dev-agent | 本リポジトリで作る Mac アプリ＋CLI。ビルド・入れ替え・起動・回収・job への報告を担い、判断する LLM を持たない（同梱 Ollama は道具として起動するだけ） |
-| 周（round） | 「ビルド → 入れ替え → 走らせる → job に報告」の 1 回。既存の `round=N` と同じ |
+| dev-agent | 本リポジトリで作る Mac アプリ＋CLI。ビルド・入れ替え・起動・回収・check run を担い、判断する LLM を持たない（同梱 Ollama は道具として起動するだけ） |
+| 周（round） | 「ビルド → 入れ替え → 走らせる → check run」の 1 回。既存の `round=N` と同じ |
 | アダプタ | インフラの種類（plugin / app / web）ごとのビルド・入れ替え・起動・回収の実装 |
 | Builder | PR ごとの worktree を保ち、マニフェストの `build` 節で差分ビルドする dev-agent の部品 |
 | マニフェスト | リポジトリ直下の `dev-agent.yaml`。期待する動作と直してよい範囲の宣言 |
 | 頭脳（brain） | ローカルエージェントが使う LLM。`local`（同梱 Ollama。既定）か `claude`（Anthropic。昇格時） |
-| ランナー | GitHub Actions のセルフホストランナー（actions-runner）。dev-agent がデータ領域に抱え、launchd agent として常駐させる。job を受けて `dev-agent run` を呼ぶ |
-| job | 各リポジトリの `dev-agent.yml` が作る Actions の job。名前 `DevAgent / <kind> (macOS)` がそのまま PR の check になる |
+| 合図 | App の webhook が中継（smee.io）を通って dev-agent に届くイベント。本文は信じず、PR 番号だけ取り出して API で読み直す |
+| check run | dev-agent が GitHub App として PR の head に作る実機の結果。名前 `DevAgent / <kind> (macOS)` |
 
 ## 付録 A. 参照した資料
 
