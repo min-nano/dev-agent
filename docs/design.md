@@ -4,8 +4,9 @@
 > 次は M0（第 6 節）。実装が始まったら、規則と手順は `CLAUDE.md` へ切り出し、この文書は
 > 設計の「なぜ」の置き場として保つ。
 >
-> v1.1 案（2026-10-02）: 設計レビュー 1-1（issue #2）を反映。歯止め（`agent:` 節・
-> `install:` 節・ハーネス）を PR の head ではなく既定ブランチから読み、dev-agent が常に
+> v1.1 案（2026-10-02）: 設計レビュー 1-1（issue #2）を反映。マニフェストを確かめ方
+> （`dev-agent.yaml`。PR の head から読む）と歯止め（`dev-agent.policy.yaml`。既定
+> ブランチから読む）の 2 つに分け、ハーネスも既定ブランチから渡し、dev-agent が常に
 > 書き換えを禁じるパスを持つ（第 4.4・4.6・4.7 節、第 7 節 #19）。
 
 ## 0. 要約
@@ -26,6 +27,8 @@
   付録 B の表で育てる。
 - **リポジトリごとの「期待する動作」は、そのリポジトリの `dev-agent.yaml`（マニフェスト）に
   宣言しておき**、dev-agent が PR ごとの依頼と合わせてローカルエージェントへ渡す。
+  直してよい範囲などの歯止めは別ファイル `dev-agent.policy.yaml` に置き、PR からは
+  変えられないよう既定ブランチから読む。
 - **環境はアプリが抱える。** ローカル LLM の実行基盤・ビルドの道具（Node・Python・
   CMake・Vectorworks SDK）・Claude Code・モデル・作業用の worktree は、すべて dev-agent が
   同梱するか初回に取り寄せ、**アプリのデータ領域の中だけ**に置く。Mac を入れ替えても
@@ -213,8 +216,8 @@
       あれば `@dev-agent` で始まるコメントを人が読む文章で書く）
  3. ラベル付け／push／`@dev-agent` コメントの webhook が中継を通って数秒で届く。dev-agent は
       合図を受けて GitHub API で PR・ラベル・head を読み直す（届かなくても 60 秒のポーリングが拾う）
- 4. dev-agent が PR 用の worktree を head に合わせ、dev-agent.yaml を節ごとに head と
-      既定ブランチから読み分け（第 4.4 節）、
+ 4. dev-agent が PR 用の worktree を head に合わせ、head の dev-agent.yaml と既定ブランチの
+      dev-agent.policy.yaml を読み（第 4.4 節）、
       差分ビルド（Builder）→ 入れ替え →（要れば再起動）→ 起動 → 走らせる → 本文・ログ・画面を回収
       ビルドが失敗したら、そこで 1 周を終えてその失敗を結果にする
  5. 結果を head の check run に書く（名前 `DevAgent / <kind> (macOS)`。本文はアプリが作ったもの）
@@ -321,18 +324,29 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
 check suite の失敗と成功のまとめを配信するので、**周の途中では起きず、結論が出たときに
 起きる**。これが G7（使用量）にも効く。
 
-### 4.4 マニフェスト `dev-agent.yaml`（リポジトリごとの「期待する動作」）
+### 4.4 マニフェスト（リポジトリごとの「期待する動作」）
 
-リポジトリの直下に置き、**コードと一緒に版管理する**。ただし 1 つのファイルを
-**節ごとに 2 か所から読み分ける**。「確かめ方」は PR が変えてよいので head から、
-「歯止め」は PR が変えてはならないので既定ブランチから読む。
+リポジトリの直下に置き、**コードと一緒に版管理する**。**読む場所が違うので、2 つの
+ファイルに分ける。**「確かめ方」は PR が変えてよいので head から、「歯止め」は PR が
+変えてはならないので既定ブランチから読む。
 
-| 節 | 読む場所 | 理由 |
-| --- | --- | --- |
-| `build` / `round` / `expect` / `artifact` / `context` | **PR の head** | 確かめ方。PR がビルド手順や試験を変えたら、その PR で効かないと困る。CI が走らせる `build.yml` と同じ信頼水準（本人の PR だけ。第 4.7 節）で、ビルドと実行は囲いの中（第 4.10 節） |
-| `agent`（`brain`・`escalate`・`allowed`・`forbidden_paths`・`budget`・`push_to` すべて） | **既定ブランチ** | 歯止め。head から読むと、エージェントが直しの中で `dev-agent.yaml` を書き換え、次の周から自分の制約を外せる |
-| `install` | **既定ブランチ** | 置き場所（`plugins_dir` など）は**囲いの外への書き込み**で、Seatbelt の例外もここから作る。head から読むと `~/Library/LaunchAgents` のような場所へ置かせられる |
-| `version` / `name` / `kind` / `platforms` | **既定ブランチ** | どのアダプタを動かすかの選択。PR で変えたいときは先に既定ブランチへ入れる |
+| ファイル | 中身 | 読む場所 | 理由 |
+| --- | --- | --- | --- |
+| **`dev-agent.yaml`**（確かめ方） | `version` / `build` / `round` / `expect` / `artifact` / `context` | **PR の head** | PR がビルド手順や試験を変えたら、その PR で効かないと困る。CI が走らせる `build.yml` と同じ信頼水準（本人の PR だけ。第 4.7 節）で、ビルドと実行は囲いの中（第 4.10 節） |
+| **`dev-agent.policy.yaml`**（歯止め） | `version` / `name` / `kind` / `platforms` / `install` / `agent` | **既定ブランチ** | `agent`（`brain`・`escalate`・`allowed`・`forbidden_paths`・`budget`・`push_to`）を head から読むと、エージェントが直しの中で書き換え、次の周から自分の制約を外せる。`install` の置き場所（`plugins_dir` など）は**囲いの外への書き込み**で、Seatbelt の例外もここから作るので、head から読むと `~/Library/LaunchAgents` のような場所へ置かせられる。`kind` 等はどのアダプタを動かすかの選択 |
+
+1 つのファイルを節ごとに読み分ける形も考えたが、分けるほうを採る。
+
+- **「どこから読まれるか」がファイル名で分かる。** PR の diff で `dev-agent.policy.yaml`
+  が出てきたら、それは「merge するまで効かない、人が見るべき変更」だと一目で分かる。
+  1 ファイルだと、同じ diff の中に「すぐ効く行」と「merge 後に効く行」が混ざる。
+- **規則が「ファイル単位」で済む。** dev-agent の読み方は「`dev-agent.yaml` は head、
+  `dev-agent.policy.yaml` は既定ブランチ」の 2 行で、節の合成が要らない。書き換え禁止
+  （第 4.7 節）もファイル名で書ける。
+- **取り違えをスキーマで弾ける。** `dev-agent.yaml` に `agent` や `install` を書いたら
+  （歯止めを head に置こうとしたら）、黙って無視せずスキーマのエラーにする。逆も同じ。
+
+決めごと（読み分け）:
 
 - **「既定ブランチ」は PR の `base.ref` ではなく、リポジトリの `default_branch`** を
   GitHub API で読んだもの（`main`）。PR を積み重ねると base は別の作業ブランチになり、
@@ -340,21 +354,24 @@ check suite の失敗と成功のまとめを配信するので、**周の途中
   固定して読み、check run の `summary` に「歯止めの出どころ: `main@<sha7>`」と書く。
 - **歯止めの信頼の根は「既定ブランチへは人が見て merge したものしか入らない」**こと。
   ルールセットで既定ブランチへの直接 push を禁じ、PR 経由に限る（M1 で 5 リポジトリに
-  設定する）。`agent` 節や `.claude/` を緩める変更は、PR の diff として人の目を通る。
-- PR が `agent` / `install` 節を変えていても、**効くのは merge した後**。dev-agent は
-  head と既定ブランチで歯止めの節が違えば、`summary` に「この PR の `agent` 節の変更は
-  merge 後に効く」と 1 行書く（気付かずに「設定したのに効かない」と迷わないため）。
-- **既定ブランチにまだマニフェストが無い**（導入する PR そのもの）ときは、歯止めの節は
+  設定する）。`dev-agent.policy.yaml` や `.claude/` を緩める変更は、PR の diff として
+  人の目を通る。
+- PR が `dev-agent.policy.yaml` を変えていても、**効くのは merge した後**。dev-agent は
+  head と既定ブランチで中身が違えば、`summary` に「この PR の `dev-agent.policy.yaml` の
+  変更は merge 後に効く」と 1 行書く（気付かずに「設定したのに効かない」と迷わないため）。
+  head 側の `dev-agent.policy.yaml` も**スキーマの検証だけはする**（typo は PR のうちに
+  知らせる）。
+- **既定ブランチにまだ `dev-agent.policy.yaml` が無い**（導入する PR そのもの）ときは、
   最も狭い既定値で補う: `agent.brain: none`（直さない）、`install` はアダプタが
   dev-agent の管理下に決めた置き場（`~/Applications/dev-agent/<name>/` など）に限り、
   外の置き場が要るアダプタ（`vectorworks-plugin`）は `neutral` で「merge 後に回る」と返す。
-- head 側のファイル全体も**スキーマの検証はする**（typo は PR のうちに知らせる）。
+  `kind` も無いので、head の `dev-agent.policy.yaml` の `kind` を**アダプタの選択にだけ**
+  使う（置き場所と直しの範囲には使わない）。
+
+`dev-agent.yaml`（確かめ方。PR の head から読む）:
 
 ```yaml
 version: 1
-name: min-nano_structure                    # 表示名。check run の見出しに使う
-kind: vectorworks-plugin                    # アダプタの種類（第 4.5 節）
-platforms: [macos-arm64]                    # 今はこれだけ。windows は将来
 
 artifact:
   source: local-build                       # 往復は手元のビルドで回す（既定）
@@ -378,14 +395,6 @@ build:                                      # 手元の差分ビルド（CI の 
   cache: per-pr                             # build_dir を PR ごとに保つ（差分ビルドのため）
   timeout: 30m
 
-install:
-  adapter: vectorworks-plugin
-  app: "Vectorworks 2026"
-  plugins_dir: "~/Library/Application Support/Vectorworks/2026/Plug-Ins"
-  name: min-nano_structureDev
-  installer: vw-install.sh                  # zip 直下。--machine --from <dir> --name <name> --plugins-dir <dir>
-  restart_when: shell-id-changed            # installed-shell= と Info.plist の VWShellId を比べる
-
 round:
   trigger: [new-head, request]              # PR の head が動いた／依頼コメントが来たら 1 周
   prepare:
@@ -408,7 +417,28 @@ expect:                                     # 人とエージェントが読む�
   - 「注意（描画側の異常）」の節が空である
   - 前の周と比べて要素数が減っていない（減るのは依頼コメントが予告したときだけ）
 
-agent:                                      # 直してよい範囲（既定ブランチのものだけが効く）
+context:                                    # エージェントへ渡す追加の読み物
+  - CLAUDE.md
+  - docs/DEV-NOTES.md#実機確認の作法
+```
+
+`dev-agent.policy.yaml`（歯止め。既定ブランチから読む）:
+
+```yaml
+version: 1
+name: min-nano_structure                    # 表示名。check run の見出しに使う
+kind: vectorworks-plugin                    # アダプタの種類（第 4.5 節）
+platforms: [macos-arm64]                    # 今はこれだけ。windows は将来
+
+install:                                    # 囲いの外へ置く場所（Seatbelt の例外もここから作る）
+  adapter: vectorworks-plugin
+  app: "Vectorworks 2026"
+  plugins_dir: "~/Library/Application Support/Vectorworks/2026/Plug-Ins"
+  name: min-nano_structureDev
+  installer: vw-install.sh                  # zip 直下。--machine --from <dir> --name <name> --plugins-dir <dir>
+  restart_when: shell-id-changed            # installed-shell= と Info.plist の VWShellId を比べる
+
+agent:                                      # 直してよい範囲
   brain: local                              # local（同梱 Ollama。既定）| claude（Anthropic）| none
   local_model: auto                         # auto = doctor がメモリから選ぶ。名指しもできる
   escalate: local -> claude:haiku -> claude # 手元の 1 周が通らなければ次へ（周数の範囲で）
@@ -419,10 +449,6 @@ agent:                                      # 直してよい範囲（既定ブ�
     - "scripts/vw-*"
   budget: { rounds: 3, minutes: 60 }
   push_to: pr-branch                        # PR のブランチへ直接 push（クラウドと同じ運用）
-
-context:                                    # エージェントへ渡す追加の読み物
-  - CLAUDE.md
-  - docs/DEV-NOTES.md#実機確認の作法
 ```
 
 決めごと:
@@ -564,7 +590,7 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
    他人の PR は、ラベルが付いていても（付けられないはずだが）動かさない。
 2. **マニフェストに書けるコマンドは、アダプタの操作とリポジトリ内のスクリプトだけ。**
    任意のシェルは書けない（CI の `build.yml` と同じ信頼水準に揃える）。
-3. **歯止めは PR から変えられない。** マニフェストの `agent` / `install` 節と
+3. **歯止めは PR から変えられない。** `dev-agent.policy.yaml`（`agent` / `install` 等）と
    エージェントのハーネス（`.claude/`・`CLAUDE.md`）は、PR の head ではなく既定ブランチ
    から読む（第 4.4・4.6 節）。PR の head は「確かめる対象」であって、「確かめ方の
    歯止め」を決める側ではない。
@@ -574,7 +600,7 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
 
    | 常に禁じるパス | 理由 |
    | --- | --- |
-   | `dev-agent.yaml` | 確かめ方（`build` / `round`）を自分で変えて「通った」ことにさせない |
+   | `dev-agent.yaml`・`dev-agent.policy.yaml` | 確かめ方（`build` / `round`）を自分で変えて「通った」ことにさせない。歯止めは既定ブランチから読むので書き換えても効かないが、PR に混ぜて merge させる道も塞ぐ |
    | `.claude/**`・`**/.claude/**`・`CLAUDE.md`・`**/CLAUDE.md`・`CLAUDE.local.md`・`.mcp.json` | ハーネス。次に起こす Claude Code（昇格先を含む）の作法と権限を変えさせない |
    | `.github/**` | CI と配布。直しの push で workflow を書き換えさせない |
    | `.gitmodules` | 取り寄せ先を差し替えさせない |
@@ -628,8 +654,8 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
   アップデートの仕組みを移植する（**dev-agent 自身の更新だけは自分で行う**。それが
   このアプリの存在理由なので例外にする。第 4.11 節）。
   - `Sources/DevAgentCore/` … マニフェストの解釈・Releases の解釈・周の状態機械・
-    コメントの組み立て・エージェントへ渡す材料の組み立て・マニフェストの読み分け（head と
-    既定ブランチの節の合成）・書き換え禁止パスの照合（第 4.7 節）。**ネットワークもプロセス起動も
+    コメントの組み立て・エージェントへ渡す材料の組み立て・マニフェストの読み分け（head の
+    `dev-agent.yaml` と既定ブランチの `dev-agent.policy.yaml`）・書き換え禁止パスの照合（第 4.7 節）。**ネットワークもプロセス起動も
     しない**純ロジックで、`swift test` で押さえる。
   - `Sources/DevAgentAdapters/` … ビルド・入れ替え・起動・回収の実装（`Process` /
     `FileManager` / `screencapture`）。判断を置かない。
@@ -758,7 +784,7 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | --- | --- | --- |
 | 1. 置き場所 | 全部 | 上の環境変数で、書き込み先をデータ領域と worktree に限る。これが土台で、残り 2 層が無くても「消せば戻る」は成り立つ |
 | 2. Linux 向けの道具 | Node / Python / Rust のビルド・テスト・Playwright | dev-agent が組み込んだ Containerization の VM。worktree と必要なキャッシュだけマウントし、ネットワークは npm / PyPI / crates.io に限る。ホストの `$HOME` は見えない |
-| 3. Mac でしか動かないもの | Xcode のビルド・Vectorworks SDK のビルド・Vectorworks 本体・エージェントの `claude -p` | Seatbelt（`sandbox-exec`）のプロファイルで、書き込みを worktree・データ領域・一時ディレクトリに限る。Vectorworks の Plug-Ins フォルダだけ例外で許す（例外のパスは既定ブランチの `install` 節から作る。第 4.4 節）。`claude -p` は Claude Code 自身のサンドボックス設定（Bash の囲い）も有効にし、そのプロファイルでは worktree の git ディレクトリの `config` と `hooks/` への書き込みを外す（第 4.7 節） |
+| 3. Mac でしか動かないもの | Xcode のビルド・Vectorworks SDK のビルド・Vectorworks 本体・エージェントの `claude -p` | Seatbelt（`sandbox-exec`）のプロファイルで、書き込みを worktree・データ領域・一時ディレクトリに限る。Vectorworks の Plug-Ins フォルダだけ例外で許す（例外のパスは既定ブランチの `dev-agent.policy.yaml` の `install` から作る。第 4.4 節）。`claude -p` は Claude Code 自身のサンドボックス設定（Bash の囲い）も有効にし、そのプロファイルでは worktree の git ディレクトリの `config` と `hooks/` への書き込みを外す（第 4.7 節） |
 
 第 2 層は **macOS 26 でしか使えない**ので、`doctor` が版を見て、26 未満なら第 3 層だけで
 動かす（機能は落ちない。囲いが弱くなるだけ）。Docker Desktop はどちらの層にも使わない。
@@ -869,7 +895,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run・webhook と中継・保険のポーリング）。**dev-agent 自身の自動アップデート**（第 4.11 節。姉妹アプリから移植）。photogrammetry で「push → 合図 → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
 | **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド。コメント）と dev-agent の往復（手元のビルド。check run）が同じ本文を出す。push から結果まで 10 分以内 |
 | **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。M0(b) の成績で「高い」と出た仕事から `local` を既定にし、昇格の規則を入れる | 実機の失敗から dev-agent が push した修正で CI が緑になる例が 1 つできる。そのうち Anthropic を呼ばずに済んだ割合を付録 B に書く |
-| **M4 残りのアダプタ＋囲いの第 2・3 層** | probe-plugin・web・ios-app。Containerization の VM（Node / Python / Rust）と Seatbelt のプロファイル。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` を持つ。portal のビルドとテストがホストに Node を入れずに通る |
+| **M4 残りのアダプタ＋囲いの第 2・3 層** | probe-plugin・web・ios-app。Containerization の VM（Node / Python / Rust）と Seatbelt のプロファイル。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` と `dev-agent.policy.yaml` を持つ。portal のビルドとテストがホストに Node を入れずに通る |
 | **M5 撤去と GUI と片付け** | 各アプリから Updater／往復の駆動を消す（第 4.9 節）。メニューバーアプリ（更新の確認・チャンネル選択・自動更新の停止を含む）。週 1 回の道具の版上げ PR。`uninstall` | Vectorworks の殻の `VW_SHELL_INPUTS` から `Updater*` と `FeedbackLoop*` が消える。クリーンな Mac に dev-agent を入れて `setup` だけで往復が回り、`uninstall` で残り物が無い |
 
 - 各段は「1 変更＝1 周が回る縦切り」で PR にし、Vectorworks の規約と同じく**実機確認が
@@ -901,7 +927,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 17 | webhook の中継 | **smee.io** を使う。自前の中継へは URL を変えるだけで移れる（第 4.3 節） |
 | 18 | dev-agent 自身の更新 | **起動時と UI から確認し、自動で入れ替える**（周の最中は周の終わりまで待つ）。M1 から入れる（第 4.11 節） |
 | 11 | 頭脳の既定 | **ローカル LLM を既定にし、Claude は昇格したときだけ**。代用できる範囲は M0 の計測で詰め、付録 B で育てる（第 4.6 節・G7） |
-| 19 | 歯止めの出どころ（issue #2） | **マニフェストの `agent` / `install` / `kind` 等とハーネス（`.claude/`・`CLAUDE.md`）は既定ブランチ（`default_branch`。PR の base ではない）から読み、`build` / `round` / `expect` / `artifact` / `context` だけを head から読む**。`dev-agent.yaml`・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に書き換えを禁じ、`git diff --no-renames` と大文字小文字を区別しない照合で決定的に確かめる。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は issue #3 で決める |
+| 19 | 歯止めの出どころ（issue #2） | **マニフェストを 2 つに分ける。確かめ方（`build` / `round` / `expect` / `artifact` / `context`）は `dev-agent.yaml` に置いて PR の head から読み、歯止め（`agent` / `install` / `kind` 等）は `dev-agent.policy.yaml` に置いてハーネス（`.claude/`・`CLAUDE.md`）とともに既定ブランチ（`default_branch`。PR の base ではない）から読む**。取り違えた節はスキーマのエラーにする。両マニフェスト・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に書き換えを禁じ、`git diff --no-renames` と大文字小文字を区別しない照合で決定的に確かめる。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は issue #3 で決める |
 
 ### 決めてほしいこと
 
@@ -917,7 +943,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 周（round） | 「ビルド → 入れ替え → 走らせる → check run」の 1 回。既存の `round=N` と同じ |
 | アダプタ | インフラの種類（plugin / app / web）ごとのビルド・入れ替え・起動・回収の実装 |
 | Builder | PR ごとの worktree を保ち、マニフェストの `build` 節で差分ビルドする dev-agent の部品 |
-| マニフェスト | リポジトリ直下の `dev-agent.yaml`。期待する動作と直してよい範囲の宣言 |
+| マニフェスト | リポジトリ直下の `dev-agent.yaml`（期待する動作。PR の head から読む）と `dev-agent.policy.yaml`（直してよい範囲・置き場所。既定ブランチから読む）の 2 つ |
 | 頭脳（brain） | ローカルエージェントが使う LLM。`local`（同梱 Ollama。既定）か `claude`（Anthropic。昇格時） |
 | 合図 | App の webhook が中継（smee.io）を通って dev-agent に届くイベント。本文は信じず、PR 番号だけ取り出して API で読み直す |
 | check run | dev-agent が GitHub App として PR の head に作る実機の結果。名前 `DevAgent / <kind> (macOS)` |
