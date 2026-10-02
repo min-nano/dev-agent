@@ -6,8 +6,9 @@
 >
 > v1.1 案（2026-10-02）: 設計レビュー 1-1（issue #2）を反映。マニフェストを確かめ方
 > （`dev-agent.yaml`。PR の head から読む）と歯止め（`dev-agent.policy.yaml`。既定
-> ブランチから読む）の 2 つに分け、ハーネスも既定ブランチから渡し、dev-agent が常に
-> 書き換えを禁じるパスを持つ（第 4.4・4.6・4.7 節、第 7 節 #19）。
+> ブランチから読む）の 2 つに分け、ハーネスも既定ブランチから渡す。エージェントが
+> 書いてよいパスは許可制（既定は拒否）にし、dev-agent が常に禁じるパスを持つ
+> （第 4.4・4.6・4.7 節、第 7 節 #19）。
 
 ## 0. 要約
 
@@ -224,8 +225,8 @@
       ビルド開始で in_progress、終わりで success / failure / neutral
  6. 失敗していて、マニフェストが直しを許していれば AgentBridge が Claude Code を起こす
       - 同じ worktree で、失敗ログ＋期待＋許した範囲を渡す
-      - エージェントが終わるたびに、dev-agent が書き換え禁止のパスに触れていないかを
-        `git diff` で決定的に確かめる（第 4.7 節）。触れていたら変更を捨てて failure で止まる
+      - エージェントが終わるたびに、dev-agent が変えたパスがすべて書いてよいパスに収まって
+        いるかを `git diff` で決定的に確かめる（第 4.7 節）。外れていたら変更を捨てて failure で止まる
       - 直したら push せずにまず 4 を手元で回し直す（ビルド → 入れ替え → 走らせる）
       - 手元で通ったものだけ PR のブランチへ push する（CI が最終の門。周数と時間に上限）
       - 直せなければ、試したことを check run の summary に書いて failure で止まる
@@ -333,7 +334,7 @@ check suite の失敗と成功のまとめを配信するので、**周の途中
 | ファイル | 中身 | 読む場所 | 理由 |
 | --- | --- | --- | --- |
 | **`dev-agent.yaml`**（確かめ方） | `version` / `build` / `round` / `expect` / `artifact` / `context` | **PR の head** | PR がビルド手順や試験を変えたら、その PR で効かないと困る。CI が走らせる `build.yml` と同じ信頼水準（本人の PR だけ。第 4.7 節）で、ビルドと実行は囲いの中（第 4.10 節） |
-| **`dev-agent.policy.yaml`**（歯止め） | `version` / `name` / `kind` / `platforms` / `install` / `agent` | **既定ブランチ** | `agent`（`brain`・`escalate`・`allowed`・`forbidden_paths`・`budget`・`push_to`）を head から読むと、エージェントが直しの中で書き換え、次の周から自分の制約を外せる。`install` の置き場所（`plugins_dir` など）は**囲いの外への書き込み**で、Seatbelt の例外もここから作るので、head から読むと `~/Library/LaunchAgents` のような場所へ置かせられる。`kind` 等はどのアダプタを動かすかの選択 |
+| **`dev-agent.policy.yaml`**（歯止め） | `version` / `name` / `kind` / `platforms` / `install` / `agent` | **既定ブランチ** | `agent`（`brain`・`escalate`・`allowed`・`paths`・`budget`・`push_to`）を head から読むと、エージェントが直しの中で書き換え、次の周から自分の制約を外せる。`install` の置き場所（`plugins_dir` など）は**囲いの外への書き込み**で、Seatbelt の例外もここから作るので、head から読むと `~/Library/LaunchAgents` のような場所へ置かせられる。`kind` 等はどのアダプタを動かすかの選択 |
 
 1 つのファイルを節ごとに読み分ける形も考えたが、分けるほうを採る。
 
@@ -341,8 +342,8 @@ check suite の失敗と成功のまとめを配信するので、**周の途中
   が出てきたら、それは「merge するまで効かない、人が見るべき変更」だと一目で分かる。
   1 ファイルだと、同じ diff の中に「すぐ効く行」と「merge 後に効く行」が混ざる。
 - **規則が「ファイル単位」で済む。** dev-agent の読み方は「`dev-agent.yaml` は head、
-  `dev-agent.policy.yaml` は既定ブランチ」の 2 行で、節の合成が要らない。書き換え禁止
-  （第 4.7 節）もファイル名で書ける。
+  `dev-agent.policy.yaml` は既定ブランチ」の 2 行で、節の合成が要らない。常に書き換えを
+  禁じるパス（第 4.7 節）もファイル名で書ける。
 - **取り違えをスキーマで弾ける。** `dev-agent.yaml` に `agent` や `install` を書いたら
   （歯止めを head に置こうとしたら）、黙って無視せずスキーマのエラーにする。逆も同じ。
 
@@ -443,10 +444,13 @@ agent:                                      # 直してよい範囲
   local_model: auto                         # auto = doctor がメモリから選ぶ。名指しもできる
   escalate: local -> claude:haiku -> claude # 手元の 1 周が通らなければ次へ（周数の範囲で）
   allowed: [build-error, test-failure, lint, expect-mismatch]
-  forbidden_paths:                          # 常時禁止（第 4.7 節）に足すもの。減らせない
-    - "src/Extensions/**"                   # 殻（再起動を強いる）
-    - "src/Payload*"
-    - "scripts/vw-*"
+  paths:                                    # 書いてよいパス。既定は拒否（allow に無いものは全部だめ）
+    allow:
+      - "src/**"
+      - "tests/**"
+    deny:                                   # allow の中から外すもの（殻・境界）
+      - "src/Extensions/**"                 # 殻（再起動を強いる）
+      - "src/Payload*"
   budget: { rounds: 3, minutes: 60 }
   push_to: pr-branch                        # PR のブランチへ直接 push（クラウドと同じ運用）
 ```
@@ -457,9 +461,16 @@ agent:                                      # 直してよい範囲
   判定できないもの（絵が崩れていないか）は人が見る。`expect` はエージェントと人の両方が
   読む「合格の定義」で、**依頼コメントの個別の指示より弱い**（依頼が勝つ）。
 - **`agent.allowed` に無い失敗は直さない。** 設計判断・SDK の未知の挙動・殻の変更は
-  クラウドと人に返す。`forbidden_paths` は各リポジトリの既存の歯止め（殻・境界・
-  インストーラ）をそのまま写す。**dev-agent が常に禁じるパス（第 4.7 節）に足すだけで、
-  減らせない**（否定のパターン `!…` はスキーマで拒む）。
+  クラウドと人に返す。
+- **書いてよいパスは許可制で、既定は拒否。** `agent.paths.allow` に当たるパスだけを
+  書いてよく、書いていないものは全部だめ。`paths.deny` は allow の中から殻・境界を外す
+  ためのもので、各リポジトリの既存の歯止めを写す。優先は「dev-agent が常に禁じるパス
+  （第 4.7 節）＞ `deny` ＞ `allow` ＞ 既定の拒否」で、`allow: ["**"]` と書いても常時禁止は
+  開かない。否定のパターン `!…` はスキーマで拒む。禁止制にしないのは、新しく足した
+  ファイルや書き漏らしたパスが黙って「直してよい」側に入るのを避けるため（インストーラ
+  の `scripts/vw-*` は、禁止に書かなくても allow に無いので触れない）。
+- **`paths.allow` が無い・空なら直しは行わない**（`brain: none` と同じ。確かめるだけ
+  回し、`summary` に「書いてよいパスが無いので直さなかった」と書く）。
 - **`brain` の既定は `local`。** ただし `allowed` の種類ごとに M0 の成績で「最初から
   `claude`」にできる（`agent.brain_by_kind: {expect-mismatch: claude}` のように）。
   ローカルで通らなければ `escalate` の順に昇格する。
@@ -518,8 +529,10 @@ Claude を使うと、肝心の設計・実装（クラウド）の分が減る�
   sandbox の設定は Claude Code 自身の囲いを外せる。head から読むと、PR（やエージェント
   自身の前の周の直し）が `claude -p` を起こした時点で効いてしまう。そこで AgentBridge は
   1. 既定ブランチの sha から `git show` で `.claude/settings.json`・`CLAUDE.md` を取り出し、
-  2. dev-agent の固定の方針（sandbox 有効・`bypassPermissions` 禁止・書き換え禁止パスへの
-     `Edit` / `Write` の deny）を**上に重ねて**データ領域に 1 つの設定ファイルを作り、
+  2. dev-agent の固定の方針（sandbox 有効・`bypassPermissions` 禁止・`Edit` / `Write` は
+     `paths.allow` にだけ allow、`paths.deny` と常時禁止は deny）を**上に重ねて**データ領域に
+     1 つの設定ファイルを作り（Bash 経由の書き込みまでは縛れないので、これは手前の
+     歯止めで、最終の判定は第 4.7 節の `git diff`）、
   3. `claude -p` には worktree の設定を自動で読ませず（`--setting-sources` から `project`
      と `local` を外す）、作った設定を `--settings` で、`CLAUDE.md` を
      `--append-system-prompt` で渡す。MCP は `--strict-mcp-config` で dev-agent が
@@ -550,7 +563,7 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
 
 1. **記録が PR に残らない。** 往復の記録は check run に集めると決めた。
    Remote Control 経由の依頼はセッションの中だけで完結し、人もクラウドも後から追えない。
-2. **マニフェストの歯止めが効かない。** `allowed` / `forbidden_paths` / `budget` は
+2. **マニフェストの歯止めが効かない。** `allowed` / `paths` / `budget` は
    dev-agent の AgentBridge が掛けるもので、Remote Control のセッションは素の Claude Code
    として何でもできる。クラウドが「速いから」とこちらを選ぶと、歯止めが抜ける。
 3. **使用量を消費する。** Remote Control は常に Anthropic の Claude で、ローカル LLM に
@@ -594,9 +607,10 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
    エージェントのハーネス（`.claude/`・`CLAUDE.md`）は、PR の head ではなく既定ブランチ
    から読む（第 4.4・4.6 節）。PR の head は「確かめる対象」であって、「確かめ方の
    歯止め」を決める側ではない。
-4. **エージェントは書き換え禁止のパスに触れない。それを dev-agent が決定的に確かめる。**
-   禁止のパスは、dev-agent が常に禁じるもの（下の表）と、既定ブランチの
-   `agent.forbidden_paths` の和。マニフェストで減らすことはできない。
+4. **エージェントは書いてよいパスにしか触れない。それを dev-agent が決定的に確かめる。**
+   書いてよいパスは**許可制で、既定は拒否**。既定ブランチの `agent.paths.allow` に当たり、
+   `agent.paths.deny` にも、dev-agent が常に禁じるパス（下の表）にも当たらないものだけ。
+   常時禁止はマニフェストで開けられない（`allow: ["**"]` でも開かない）。
 
    | 常に禁じるパス | 理由 |
    | --- | --- |
@@ -610,15 +624,17 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
    - 比べるのは「周の始めの sha（PR の head）」と「エージェントの後の worktree」
      （commit 済みのものと、未 commit・未追跡のものの両方）。`git diff --name-only
      --no-renames -z` を使う（改名検出があると、`.github/x.yml` を `x.yml` へ移した
-     ときに新しい名前しか出ない。`-z` は改行を含む名前のため）。
+     ときに新しい名前しか出ない。`-z` は改行を含む名前のため）。変更・追加・削除の
+     **すべてのパスが**書いてよいパスに収まっていなければならない（改名は削除＋追加と
+     して両方を見る。新しいファイルも allow に当たらなければだめ）。
    - パターンの照合は**大文字小文字を区別しない**（APFS は既定で区別しないので、
      `.CLAUDE/settings.json` は次の checkout で `.claude/settings.json` として読まれる）。
      Unicode も NFC に揃えてから比べる。照合は Core の純ロジックにし、`swift test` で
      こうした抜け道を押さえる。
    - **シンボリックリンクの追加・変更も止める**（`git diff --raw` で mode `120000`）。
      リンク越しに worktree の外や禁止のパスへ書かせないため。
-   - 触れていたら、その周の変更を捨てて（worktree を周の始めの sha に戻す）`failure` に
-     し、`summary` に触れたパスを書く。**昇格はしない**（直せなかったのではなく、
+   - 外れていたら、その周の変更を捨てて（worktree を周の始めの sha に戻す）`failure` に
+     し、`summary` に外れたパスを書く。**昇格はしない**（直せなかったのではなく、
      範囲を破ったので）。
    - dev-agent 自身が worktree で `git` を呼ぶときは `-c core.hooksPath=/dev/null
      -c core.fsmonitor=false` を付け、`GIT_CONFIG_NOSYSTEM=1` にする。エージェントが
@@ -655,7 +671,7 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
   このアプリの存在理由なので例外にする。第 4.11 節）。
   - `Sources/DevAgentCore/` … マニフェストの解釈・Releases の解釈・周の状態機械・
     コメントの組み立て・エージェントへ渡す材料の組み立て・マニフェストの読み分け（head の
-    `dev-agent.yaml` と既定ブランチの `dev-agent.policy.yaml`）・書き換え禁止パスの照合（第 4.7 節）。**ネットワークもプロセス起動も
+    `dev-agent.yaml` と既定ブランチの `dev-agent.policy.yaml`）・書いてよいパスの照合（第 4.7 節）。**ネットワークもプロセス起動も
     しない**純ロジックで、`swift test` で押さえる。
   - `Sources/DevAgentAdapters/` … ビルド・入れ替え・起動・回収の実装（`Process` /
     `FileManager` / `screencapture`）。判断を置かない。
@@ -927,7 +943,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 17 | webhook の中継 | **smee.io** を使う。自前の中継へは URL を変えるだけで移れる（第 4.3 節） |
 | 18 | dev-agent 自身の更新 | **起動時と UI から確認し、自動で入れ替える**（周の最中は周の終わりまで待つ）。M1 から入れる（第 4.11 節） |
 | 11 | 頭脳の既定 | **ローカル LLM を既定にし、Claude は昇格したときだけ**。代用できる範囲は M0 の計測で詰め、付録 B で育てる（第 4.6 節・G7） |
-| 19 | 歯止めの出どころ（issue #2） | **マニフェストを 2 つに分ける。確かめ方（`build` / `round` / `expect` / `artifact` / `context`）は `dev-agent.yaml` に置いて PR の head から読み、歯止め（`agent` / `install` / `kind` 等）は `dev-agent.policy.yaml` に置いてハーネス（`.claude/`・`CLAUDE.md`）とともに既定ブランチ（`default_branch`。PR の base ではない）から読む**。取り違えた節はスキーマのエラーにする。両マニフェスト・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に書き換えを禁じ、`git diff --no-renames` と大文字小文字を区別しない照合で決定的に確かめる。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は issue #3 で決める |
+| 19 | 歯止めの出どころ（issue #2） | **マニフェストを 2 つに分ける。確かめ方（`build` / `round` / `expect` / `artifact` / `context`）は `dev-agent.yaml` に置いて PR の head から読み、歯止め（`agent` / `install` / `kind` 等）は `dev-agent.policy.yaml` に置いてハーネス（`.claude/`・`CLAUDE.md`）とともに既定ブランチ（`default_branch`。PR の base ではない）から読む**。取り違えた節はスキーマのエラーにする。エージェントが書いてよいパスは**許可制で既定は拒否**（`agent.paths.allow` から `paths.deny` を除いたもの）。両マニフェスト・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に禁じ、マニフェストでは開けない。判定は `git diff --no-renames` と大文字小文字を区別しない照合で決定的に行う。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は issue #3 で決める |
 
 ### 決めてほしいこと
 
