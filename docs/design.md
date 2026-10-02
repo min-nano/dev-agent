@@ -547,7 +547,7 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
 - **言語と形**: Swift（SwiftPM）。姉妹リポジトリ（photogrammetry / agent-mlx）と同じ
   「純ロジックの Core ＋ 薄い CLI ＋ 薄い GUI」の三分割にし、同じ CI・リリース・自動
   アップデートの仕組みを移植する（**dev-agent 自身の更新だけは自分で行う**。それが
-  このアプリの存在理由なので例外にする）。
+  このアプリの存在理由なので例外にする。第 4.11 節）。
   - `Sources/DevAgentCore/` … マニフェストの解釈・Releases の解釈・周の状態機械・
     コメントの組み立て・エージェントへ渡す材料の組み立て。**ネットワークもプロセス起動も
     しない**純ロジックで、`swift test` で押さえる。
@@ -693,6 +693,29 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
   入れていたもの）・`~/.claude`（別の Claude Code）には触れない。
 - データ領域を手で丸ごと消しても壊れない（次の起動で `setup` が揃え直す）。
 
+### 4.11 dev-agent 自身の更新（起動時と UI から、自動で）
+
+dev-agent は他のアプリから更新の仕組みを引き上げる当人なので、**自分の更新は自分で、
+人の手を介さずに**行う。姉妹アプリの `UpdateFeed` / `UpdaterService` を土台にし、
+Vectorworks プラグインの「起動時には確認しない」は踏襲しない（あれは Vectorworks の起動に
+乗るのを避けるためで、dev-agent 自身の起動には乗せてよい）。
+
+| 項目 | 決めごと |
+| --- | --- |
+| 配布 | 姉妹アプリと同じ。CI が main への push で `stable`、PR ごとに `dev-<slug>` のプレリリースを公開する。notes は `channel=` / `branch=` / `commit=` / `built=`。アセットは `DevAgent.app.zip`（CLI と同梱物を内包） |
+| 確認のきっかけ | **起動時**（GUI の起動、`watch` の常駐開始）と、**UI の「更新を確認」**（メニューバーのメニューと `dev-agent update`）。加えて常駐中は 6 時間ごとに確認する（ずっと起動したままの Mac で取り残されないため）。確認は Releases API を ETag 付きで読むだけで軽い |
+| 新旧の比べ方 | Info.plist の `GitCommit` / `GitBranch` / `BuildChannel` と、選んでいるチャンネル（stable か特定の dev ブランチ）のリリースの `commit=` を比べる。異なれば更新 |
+| チャンネル | 既定は `stable`。UI で dev ブランチを選べる（dev-agent 自身の PR を実機で確かめるための道。姉妹アプリの「開発版を選んで更新」と同じ） |
+| 入れ替えの手順 | ダウンロード → `ditto` で展開 → 隔離解除とアドホック署名 → **往復が走っていなければ**自分を終了し、同梱の `install-update.sh` が `.app` を置き換えて再起動する。`watch` の常駐（launchd agent）は新しい `.app` で立ち上がる |
+| 走っている周との兼ね合い | 周の最中には入れ替えない。更新を見つけたら「次に手が空いたとき」に印を付け、周が終わった直後に入れ替える。UI からの明示の指示でも、周が走っていれば「周の終わりに入れ替える」と答える（途中で止めると check run が `in_progress` のまま残る） |
+| 同梱物の更新 | `.app` に同梱した道具（Ollama・Node・CMake・uv）は `.app` ごと置き換わる。取り寄せ物（Claude Code・SDK・モデル）は、新しい `toolchains.yaml` と `toolchains.lock` の差分を次の `setup` が埋める（起動後に自動で走る） |
+| 自動で入れるか | **入れる**（確認と入れ替えまで自動）。止めたいときは UI で「自動更新を止める」。止めている間も確認はして、「新しい版がある」とだけ知らせる |
+| 失敗したとき | 展開や署名に失敗したら元の `.app` を触らず、次回の確認で再試行する。入れ替え後の起動に失敗したら、`install-update.sh` が直前の `.app` を戻す（1 世代だけ退避しておく） |
+
+M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビルド → Mac で確かめる」の往復で
+進むので、最初から自動で入れ替わるほうが速いこと（姉妹アプリで同じ仕組みが動いている
+ので移植で済む）。
+
 ## 5. リポジトリごとの移行の要点
 
 ### 5.1 Vectorworks プラグイン（最も効果が大きく、最も注意が要る）
@@ -763,11 +786,11 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | 段 | 何をするか | 終わりの印 |
 | --- | --- | --- |
 | **M0 検証スパイク（作る前に確かめる）** | (a) GitHub App の webhook → smee.io → SSE で、ラベル付けから dev-agent が気付くまでの秒数と、1 日の取りこぼし率（ポーリングが拾った件数）を測る。launchd agent から `open -a "Vectorworks 2026"` と `xcodebuild` が**ログイン中のユーザーの画面で**動くか（GUI と Metal が使えるか）も確かめる。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) 自作 GitHub App の installation token で check run を作り、`output.text` に 60 KB の本文を載せ、クラウドセッションの PR 購読がその失敗で起きるか・`get_check_run` で読めるか | 各項目の結果を本書の付録に書く。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
-| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run・webhook と中継・保険のポーリング）。photogrammetry で「push → 合図 → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
+| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run・webhook と中継・保険のポーリング）。**dev-agent 自身の自動アップデート**（第 4.11 節。姉妹アプリから移植）。photogrammetry で「push → 合図 → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
 | **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド。コメント）と dev-agent の往復（手元のビルド。check run）が同じ本文を出す。push から結果まで 10 分以内 |
 | **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。M0(b) の成績で「高い」と出た仕事から `local` を既定にし、昇格の規則を入れる | 実機の失敗から dev-agent が push した修正で CI が緑になる例が 1 つできる。そのうち Anthropic を呼ばずに済んだ割合を付録 B に書く |
 | **M4 残りのアダプタ＋囲いの第 2・3 層** | probe-plugin・web・ios-app。Containerization の VM（Node / Python / Rust）と Seatbelt のプロファイル。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` を持つ。portal のビルドとテストがホストに Node を入れずに通る |
-| **M5 撤去と GUI と片付け** | 各アプリから Updater／往復の駆動を消す（第 4.9 節）。メニューバーアプリ。dev-agent 自身の自動アップデートと週 1 回の道具の版上げ PR。`uninstall` | Vectorworks の殻の `VW_SHELL_INPUTS` から `Updater*` と `FeedbackLoop*` が消える。クリーンな Mac に dev-agent を入れて `setup` だけで往復が回り、`uninstall` で残り物が無い |
+| **M5 撤去と GUI と片付け** | 各アプリから Updater／往復の駆動を消す（第 4.9 節）。メニューバーアプリ（更新の確認・チャンネル選択・自動更新の停止を含む）。週 1 回の道具の版上げ PR。`uninstall` | Vectorworks の殻の `VW_SHELL_INPUTS` から `Updater*` と `FeedbackLoop*` が消える。クリーンな Mac に dev-agent を入れて `setup` だけで往復が回り、`uninstall` で残り物が無い |
 
 - 各段は「1 変更＝1 周が回る縦切り」で PR にし、Vectorworks の規約と同じく**実機確認が
   要るものは下書き PR で、ユーザーの「確認できた」を待ってからマージ**する。
@@ -796,6 +819,7 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | 15 | 気付き方 | セルフホストランナーは**全リポジトリが公開なので使わない**。App の webhook を smee.io で中継して SSE で受け（数秒）、60 秒のポーリングを保険にする。中継は合図だけを運び、真実は API で読み直す（第 4.3 節） |
 | 16 | Remote Control の位置付け | **人の窓であって、エージェント間の経路にはしない**。クラウドからローカルへの依頼はラベルだけ。dev-agent は Remote Control のサーバを常駐させず、人が `dev-agent rc` で起こす（第 4.6 節） |
 | 17 | webhook の中継 | **smee.io** を使う。自前の中継へは URL を変えるだけで移れる（第 4.3 節） |
+| 18 | dev-agent 自身の更新 | **起動時と UI から確認し、自動で入れ替える**（周の最中は周の終わりまで待つ）。M1 から入れる（第 4.11 節） |
 | 11 | 頭脳の既定 | **ローカル LLM を既定にし、Claude は昇格したときだけ**。代用できる範囲は M0 の計測で詰め、付録 B で育てる（第 4.6 節・G7） |
 
 ### 決めてほしいこと
