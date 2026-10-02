@@ -15,6 +15,13 @@
 > 1 つの commit にまとめ、検査と手元の 1 周を通ったものだけを PR のブランチではなく
 > **直しのブランチ**（`dev-agent/pr-<N>/r<round>`）へ App のトークンで push する。
 > 取り込むかはクラウドが決める（第 4.2・4.3・4.6・4.7・4.10 節、第 7 節 #20）。
+>
+> v1.3 案（2026-10-02）: 設計レビュー 1-3（issue #4）を反映。GitHub へ出ていく文字列
+> （check run の `title`・`summary`・`text`・annotations、issue への 1 行）は、投稿の直前に
+> Core の伏せ字（`Redactor`）を必ず通し、伏せ字を通らない投稿経路を型で作れなくする。
+> ホーム・ユーザー名・氏名・コンピュータ名・秘密の形・dev-agent が持つ秘密の完全一致を
+> 伏せ、確かめられないときは本文を載せない。直しの commit にも同じ検出をかけ、当たれば
+> push しない（第 4.2・4.3・4.6・4.7・4.8・4.10 節、第 7 節 #21）。
 
 ## 0. 要約
 
@@ -230,7 +237,8 @@
       dev-agent.policy.yaml を読み（第 4.4 節）、
       差分ビルド（Builder）→ 入れ替え →（要れば再起動）→ 起動 → 走らせる → 本文・ログ・画面を回収
       ビルドが失敗したら、そこで 1 周を終えてその失敗を結果にする
- 5. 結果を head の check run に書く（名前 `DevAgent / <kind> (macOS)`。本文はアプリが作ったもの）
+ 5. 結果を head の check run に書く（名前 `DevAgent / <kind> (macOS)`。本文はアプリが作ったもの。
+      公開リポジトリなので、投稿の直前に必ず伏せ字を通す。第 4.3 節）
       ビルド開始で in_progress、終わりで success / failure / neutral
  6. 失敗していて、マニフェストが直しを許していれば AgentBridge が Claude Code を起こす
       - 同じ worktree で、失敗ログ＋期待＋許した範囲を渡す。GitHub の資格情報は渡さず、
@@ -307,8 +315,8 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
 | `status` / `conclusion` | ビルド開始で `in_progress`、終わりで `success`（期待どおり）／`failure`（ビルド失敗・期待と不一致・落ちた）／`neutral`（道具が無い・停止で中断）／`skipped`（本人の PR でない等、対象外） |
 | `output.title` | 1 行の結論。例: `round 3: 柱 120/120・耐力壁 36/36・注意 0`、`ビルド失敗（clang: 2 errors）` |
 | `output.summary` | 周の表（周・build・source=local／ci・所要・ビルド・入れ替え・実行・判定）と、`expect` の各項目の○× |
-| `output.text` | **アプリが作った本文をそのまま**（Vectorworks の往復なら今の `## 実機フィードバック …` 以下、プローブなら `## 実機プローブ …` 以下）。診断ログの全文を含む。上限（65,535 文字）に収まるよう古いほうから削る |
-| `annotations` | ビルドエラー・lint をファイルと行に付ける（1 回 50 件まで、超えたら PATCH で追記） |
+| `output.text` | アプリが作った本文（Vectorworks の往復なら今の `## 実機フィードバック …` 以下、プローブなら `## 実機プローブ …` 以下）を、**下の「公開する前の伏せ字」に通したもの**。診断ログの全文を含む。伏せ字を通した後で、上限（65,535 文字）に収まるよう古いほうから削る |
+| `annotations` | ビルドエラー・lint をファイルと行に付ける（1 回 50 件まで、超えたら PATCH で追記）。`message`・`title`・`raw_details` も伏せ字を通す |
 | `details_url` | dev-agent の GUI でその周を開く URL スキーム（`dev-agent://round/<repo>/<pr>/<N>`） |
 
 - **同じ head で周を重ねる**（手元の直しを試しているとき）は、同じ check run を PATCH で
@@ -319,11 +327,16 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
 - **直せずに止まった**ときは `failure` にし、`summary` に試したこと・残っている失敗・
   人かクラウドに頼みたいことを書く。これが従来の `gave-up` コメントの代わり。
 - **画面**（スクリーンショット）は check run の `images` に載せられるが、公開 URL が要る。
-  私有リポジトリでは載せられないので、画面は dev-agent のデータ領域に保存して GUI で
-  見せ、check run には枚数とパスだけ書く（公開リポジトリでも載せない。他人に見える）。
+  私有リポジトリでは載せられないので、画面は周の記録（`~/Library/Logs/dev-agent/rounds/`。
+  第 4.10 節）に保存して GUI で見せ、check run には枚数と、周の記録からの相対パス
+  （`<repo>/pr-<N>/r<round>/screen-1.png`）だけ書く（公開リポジトリでも載せない。他人に見える。画面に何が写るかは伏せ字で
+  扱えない）。
 - **プローブの結果が issue 宛て**（PR の無い main のプローブ）のときだけ、check run を
   main の head に作ったうえで、issue にも 1 行（check run への link）をコメントする。
   これが唯一のコメントで、理由は「issue からは check run が見えない」ため。
+- **公開する文字列は、すべて下の「公開する前の伏せ字」を通る。** `title`・`summary`・
+  `text`・`annotations`・issue への 1 行のどれも例外にしない（ローカル LLM が書いた要約や
+  「試したこと」も、アプリが作った本文と同じく伏せ字を通す）。
 
 - **required checks には入れない**（決定。Mac が落ちていると全 PR が止まるため）。
   `draw/` を含む PR をユーザーの「確認できた」まで待つ規約は、人の運用のまま。
@@ -332,6 +345,63 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
   コードを走らせる口になりうる）。上の経路は、GitHub から Mac へ**入るものが「合図」
   だけ**で、実行の判断（本人の PR か・ラベルがあるか・head は何か）を dev-agent が API で
   読み直して行う点が違う。
+
+#### 公開する前の伏せ字（Reporter の唯一の入口）
+
+**全リポジトリが公開**なので、check run に書いたものは誰でも読め、消しても写しが
+残りうる。診断ログ・ビルドログ・クラッシュレポートには、ホームのパス（＝macOS の
+ユーザー名）・氏名を含むコンピュータ名・環境変数・トークンの断片が混じる。そこで
+**GitHub へ出ていく文字列は、投稿の直前に必ず Core（純ロジック）の伏せ字を通す**。
+「気を付けて書く」ではなく、**伏せ字を通らない投稿経路を型で作れない**ようにする。
+
+- **入口は 1 つ。** Core に `Redactor` と、その出力の型 `PublicText` を置く。`PublicText`
+  は Core の外から作れない（初期化子を公開しない）。`DevAgentGitHub` の check run・
+  annotation・issue コメントを書く関数は `String` を受け取らず `PublicText` だけを受け取る。
+  したがって Reporter（と他の誰か）が伏せ字を飛ばして書こうとしても、コンパイルが通らない。
+  check run の `name`・`details_url`・`conclusion` のような決まった形のものは、Core が
+  決まった部品からだけ組み立てる（自由な文字列を混ぜない）。
+- **順番は「揃える → 伏せ字 → 組み立て → 削る」。** まず ANSI のエスケープと `\r` を
+  取り除き、Unicode を NFC に揃える（色付きのログでトークンが割られて当たらない、を防ぐ）。
+  伏せ字は周ごとの生の本文・ログに 1 回ずつかけ、組み立てた後に上限まで削る（削ってから
+  伏せると、秘密が切れ目で半分になり、パターンに当たらなくなる）。前の周を `text` に残すときも、ローカルに保存した**生の
+  記録から毎回組み立て直して伏せる**（一度伏せたものを継ぎ足していくと、伏せ字の規則を
+  増やしても古い周に効かない）。
+- **伏せるもの**（置き換えた跡は `[redacted:<種類>]` と残し、何が消えたかは読めるように
+  する。値そのものの長さや先頭は残さない）:
+
+  | 種類 | 対象 | 置き換え |
+  | --- | --- | --- |
+  | 完全一致の秘密 | dev-agent が持つ秘密の値そのもの: キーチェーンの App 秘密鍵（PEM の各行も）・webhook secret・中継の URL、発行中と直近に発行した installation token・JWT。あわせて、それらの URL エンコード・`x-access-token:<token>` の Base64（git の Basic 認証の形）も | `[redacted:secret]` |
+  | 秘密の形 | `ghp_`・`gho_`・`ghu_`・`ghs_`・`ghr_`・`github_pat_`・`sk-ant-`・`sk-`・`xox[abprs]-`・`AKIA`/`ASIA`＋16 桁・`-----BEGIN … PRIVATE KEY-----` から `END` までのブロック・`eyJ…\.eyJ…\.…`（JWT）・`Authorization: (Bearer\|token\|Basic) …`・URL の userinfo（`https://<user>:<pass>@`） | `[redacted:<github-token\|anthropic-key\|private-key\|jwt\|auth-header\|url-credential\|…>]` |
+  | 秘密らしい変数 | `env` やビルドログの `NAME=value` / `NAME: value` で、名前に `TOKEN`・`SECRET`・`PASSWORD`・`PASSWD`・`API_KEY`・`PRIVATE_KEY`・`CREDENTIAL`・`AUTH` を含むもの（大文字小文字を区別しない）の値 | `NAME=[redacted:env]` |
+  | ホーム | `$HOME` の実パス（`/Users/<name>` と `/System/Volumes/Data/Users/<name>`。NFC に揃えたうえで、大文字小文字を区別しない）。`$TMPDIR` の `/var/folders/<xx>/<…>/` も | `~` / `$TMPDIR/` |
+  | 人と機械の名前 | macOS のユーザー名（語の境界で。3 文字未満ならパスの中に出たものだけ）・氏名（`NSFullUserName`）・コンピュータ名と LocalHostName（既定では「<氏名>の MacBook Pro」になる）・ハードウェア UUID とシリアル・つないだ iPhone の UDID・手元の git の `user.email`（`users.noreply.github.com` は除く） | `<user>` / `<name>` / `<host>` / `<uuid>` / `<serial>` / `<udid>` / `<email>` |
+
+  完全一致の値と人と機械の名前は、`Redactor` を作るときに Adapters／GitHub 側が集めて
+  渡す（Core は読みに行かない。純ロジックのまま）。短すぎる値（8 文字未満の秘密）は
+  完全一致で伏せると本文を壊すので、受け付けずに `doctor` で警告する。
+- **閉じる側に倒す。** 完全一致の値を集められない（キーチェーンがロックされている等）とき、
+  または伏せた結果をもう一度検査して**完全一致の秘密が 1 つでも残っていたら**（規則の
+  重なりや不具合の保険）、本文は載せない。`conclusion` と決まった形の `title`
+  （「round N: 結果あり。本文は伏せ字を確かめられず載せていない」）だけを書き、生の記録は
+  手元の GUI で見せる。
+- **生の記録は手元にだけ残す。** 伏せる前の本文・ログ・画面は周の記録
+  （`~/Library/Logs/dev-agent/rounds/`。第 4.10 節）に置き、GUI はそれを見せる。GitHub
+  へ出すのは伏せたものだけ。
+- **伏せ字で守れないもの**（残りのリスクとして受け入れ、ここに書いておく）: 上の形に
+  当たらない第三者の秘密（リポジトリの `.env` をビルドが出力した等）、画面に写ったもの
+  （画面はそもそも載せない）、本文の中の意味（プロジェクト名や図面の中身）。漏れに
+  気付いたときのために、`dev-agent scrub --repo --pr` で dev-agent の check run の
+  `output` を「伏せ直したもの」か空で PATCH して上書きする（GitHub は check run を消す
+  API を持たないので、上書きが手段になる）。秘密が漏れたら、その値を作り直す（App の
+  鍵の再発行など）のが先。
+- **直しの commit にも同じ検査をかける**（第 4.7 節）。こちらは伏せ字で書き換えると
+  コードが壊れるので、**当たったら push しない**。
+- `Redactor` は `swift test` で押さえる。種類ごとの例に加えて、日本語のユーザー名（NFC／NFD）、
+  大文字小文字違いのホーム、改行や ANSI のエスケープで割られたトークン、PEM の途中の行、
+  語の中に含まれるユーザー名（伏せない）、「伏せ字 → 削る」で境目に掛かった秘密、
+  前の周を組み立て直したときの伏せ漏れ、を入れる。さらに「任意の本文に既知の秘密を
+  差し込み、出力に 1 つも残らない」ことを乱数で多数回確かめる。
 
 #### ローカル → クラウド: 直しのブランチ（取り込むかはクラウドが決める）
 
@@ -584,7 +654,10 @@ Claude を使うと、肝心の設計・実装（クラウド）の分が減る�
 - **ローカル LLM に渡す材料は dev-agent が絞る。** 失敗ログの該当部分・`expect`・
   `allowed`・直してよいファイルだけを渡す。全文脈を読ませない（小さいモデルは文脈で
   迷う）。`--bare` で `CLAUDE.md` 以外の自動読み込みを切り、`--append-system-prompt` で
-  要るものだけ足す。
+  要るものだけ足す。渡すログからも**秘密（完全一致と秘密の形）だけは伏せる**（昇格先の
+  claude へは Anthropic へ送られるため。ホームのパスは直しに要るので伏せない）。
+  エージェントが書いた要約や「試したこと」を check run に載せるときは、アプリの本文と
+  同じく公開する前の伏せ字を通す（第 4.3 節）。
 - **昇格の規則は 1 か所**（`agent.escalate`）。local が「直せた」と言っても、手元の 1 周
   （ビルド → 入れ替え → 走らせる）が通らなければ直せていない。通らなかったら claude へ。
   claude でも通らなければ失敗で止まる。
@@ -707,6 +780,12 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
    - push は**エージェントのプロセスが残っていないとき**だけ、明示した URL と refspec で
      行う: `git push https://github.com/<o>/<r>.git <fix>:refs/heads/dev-agent/pr-<N>/r<round>`。
      トークンは `GIT_ASKPASS` で渡し、ディスクにも引数にも残さない。
+   - push の前に、直しの commit が**足した行**（`git diff --no-renames -U0` の `+` の行と、
+     新しいファイルの名前）に、check run と同じ伏せ字の検出（完全一致の秘密・秘密の形・
+     ホームの実パス。第 4.3 節）をかける。当たったら**書き換えずに push しない**
+     （伏せ字で直すとコードが壊れ、黙って直すと「ローカル LLM が秘密を書いた」ことが
+     見えなくなる）。周の変更を捨てて `failure` にし、`summary` には種類とパスだけ書く
+     （値も行の中身も書かない）。昇格はしない。
    - **書いてよいブランチを GitHub 側では絞らない**（決定。App の Contents: write は
      全ブランチに効き、ルールセットで絞ると人・クラウド・CI の push まで例外の一覧で
      管理することになるため）。既定ブランチだけは第 7 節 #19 のルールセットで守られ、DevAgent は
@@ -735,6 +814,10 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
 10. **Mac 全体を変えない。** `/usr/local`・Homebrew・`~/.local`・シェルの rc には触れない。
     dev-agent が置くものはデータ領域と launchd の plist 1 つだけで、`dev-agent uninstall` が
     全部消す。
+11. **公開するものは伏せ字を通す。** 全リポジトリが公開なので、GitHub へ出ていく文字列は
+    すべて Core の `Redactor` を通し、その出力の型 `PublicText` しか GitHub への書き込み関数は
+    受け取らない（第 4.3 節「公開する前の伏せ字」）。伏せ字を確かめられないときは本文を
+    載せない（閉じる側に倒す）。伏せる前の生の記録は手元の周の記録にだけ残す。
 
 ### 4.8 dev-agent の作り
 
@@ -744,8 +827,10 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
   このアプリの存在理由なので例外にする。第 4.11 節）。
   - `Sources/DevAgentCore/` … マニフェストの解釈・Releases の解釈・周の状態機械・
     コメントの組み立て・エージェントへ渡す材料の組み立て・マニフェストの読み分け（head の
-    `dev-agent.yaml` と既定ブランチの `dev-agent.policy.yaml`）・書いてよいパスの照合（第 4.7 節）。**ネットワークもプロセス起動も
-    しない**純ロジックで、`swift test` で押さえる。
+    `dev-agent.yaml` と既定ブランチの `dev-agent.policy.yaml`）・書いてよいパスの照合（第 4.7 節）・
+    公開する前の伏せ字（`Redactor` と、その出力だけが持てる型 `PublicText`。第 4.3 節）。
+    **ネットワークもプロセス起動もしない**純ロジックで、`swift test` で押さえる。伏せる値
+    （キーチェーンの秘密・ユーザー名・コンピュータ名など）は呼ぶ側が集めて渡す。
   - `Sources/DevAgentAdapters/` … ビルド・入れ替え・起動・回収の実装（`Process` /
     `FileManager` / `screencapture`）。判断を置かない。
   - `Sources/DevAgentBuilder/` … worktree の管理（`git worktree add` / fetch / checkout）と
@@ -760,13 +845,16 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
     installation token、check run の作成と更新、PR・ラベル・コメント・Releases の読み取り
     （ETag 付き）、webhook の署名検証、直しのブランチの push と削除。判断を置かない。
     check run の本文の組み立て、push の refspec の組み立て（`dev-agent/` 以外を作らない）、
-    直しのブランチを消すかの判定（第 4.3 節）は Core（純ロジック）。
+    直しのブランチを消すかの判定（第 4.3 節）は Core（純ロジック）。**書き込む関数
+    （check run・annotation・issue コメント）は `String` を受け取らず `PublicText` だけを
+    受け取る**ので、伏せ字を飛ばす経路はコンパイルが通らない。
   - `Sources/DevAgentWatch/` … 中継（smee.io）への SSE 購読と、保険のポーリングの時計。
     受けた合図を「この PR を読み直せ」に落とすだけで、判断を置かない。
   - `Sources/dev-agent/` … CLI。`setup`（道具とモデルを揃え、App の鍵と中継を設定する）／
     `doctor`（足りない物の名指し）／`watch`（常駐。合図を受けて `run` を回す）／
     `run --repo --pr`（1 周だけ）／`build --repo --pr`／`install --repo --build`／
     `rc`（人のための Remote Control）／`stop`（Mac 全体）／`status`／`manifest check`／
+    `scrub --repo --pr`（伏せ漏れに気付いたとき、dev-agent の check run の `output` を上書きする）／
     `uninstall`（全部消す）。launchd で `watch` を常駐。
   - `Apps/DevAgentApp/` … メニューバーアプリ。一覧（repo × PR × 周）・ログ・停止・
     「このビルドを入れる」。判断を持たない。
@@ -779,7 +867,8 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
   dev-agent だけが持つ。
 - **状態の置き場**: `~/Library/Application Support/dev-agent/state/<repo>/<pr>.json`
   （周・最後に見た head・最後に投稿した時刻・予算の消費・直しのブランチの一覧）。
-  push 用のリポジトリは `state/push/<repo>.git`。ビルドの中間物は
+  push 用のリポジトリは `state/push/<repo>.git`。伏せる前の本文・ログ・画面（周の記録）は
+  `~/Library/Logs/dev-agent/rounds/`（GitHub へは伏せたものだけを出す）。ビルドの中間物は
   `~/Library/Caches/dev-agent/`（消えても作り直せるもの）。Vectorworks の
   `feedback.txt` と同じ役目をここへ移す。
 - **気付き方**: App の webhook → smee.io → SSE（数秒）＋ 60 秒の ETag 付きポーリング
@@ -834,6 +923,7 @@ dev-agent へ移る PR で「DevAgent の check run の読み方」に書き換�
   <repo>/pr-<N>/{src,build}   worktree と差分ビルドの中間物
   spm/ derived-data/ npm/ cargo-target/
 ~/Library/Logs/dev-agent/
+  rounds/<repo>/pr-<N>/r<round>/   周の記録（伏せる前の本文・ログ・画面。手元の GUI だけが見せる）
 ~/Applications/dev-agent/<name>/      確かめるために入れた .app
 ~/Library/LaunchAgents/jp.min-nano.dev-agent.plist
 キーチェーン: dev-agent（GitHub トークン）、Claude Code の資格情報
@@ -985,7 +1075,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 段 | 何をするか | 終わりの印 |
 | --- | --- | --- |
 | **M0 検証スパイク（作る前に確かめる）** | (a) GitHub App の webhook → smee.io → SSE で、ラベル付けから dev-agent が気付くまでの秒数と、1 日の取りこぼし率（ポーリングが拾った件数）を測る。launchd agent から `open -a "Vectorworks 2026"` と `xcodebuild` が**ログイン中のユーザーの画面で**動くか（GUI と Metal が使えるか）も確かめる。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) 自作 GitHub App の installation token で check run を作り、`output.text` に 60 KB の本文を載せ、クラウドセッションの PR 購読がその失敗で起きるか・`get_check_run` で読めるか。(k) **head のハーネスを読ませない起こし方**: worktree に「起動で印のファイルを作る hook」「`bypassPermissions`」「`.mcp.json` のサーバ」「skill」を仕込み、第 4.6 節の組み立て（`--setting-sources`・`--settings`・`--strict-mcp-config`・`--append-system-prompt`）で `claude -p` を起こして、どれも効かないこと、既定ブランチから渡した hooks と deny は効くことを確かめる。(l) **エージェントが push できないことと、dev-agent の push の道**: 第 4.7 節の囲い（ネットワーク許可・Seatbelt・環境）の下の `claude -p` の Bash から、`git push`（osxkeychain・SSH・`~/.config/gh` のいずれを使っても）・`gh`・`security find-internet-password` が**すべて失敗する**こと。App の installation token（Contents: write、Workflows なし）で `dev-agent/pr-<N>/r<round>` への push と削除ができ、既定ブランチへは拒まれ、`.github/workflows/` を含む push も拒まれること。直しの sha に付けた check run が、fast-forward で取り込んだ後の PR の head でそのまま見え、dev-agent がビルドを飛ばせること | 各項目の結果を本書の付録に書く。(k) で効いてしまう種類があれば、第 4.6 節の「PR がそれを変えていたらエージェントを起こさない」をその種類に適用する。(l) でエージェントから push できる道が 1 つでも残れば、塞げるまで M3（直し）に進まない。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
-| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run・webhook と中継・保険のポーリング）。**dev-agent 自身の自動アップデート**（第 4.11 節。姉妹アプリから移植）。photogrammetry で「push → 合図 → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
+| **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント・**公開する前の伏せ字**。check run を初めて書く段なので、ここで入れて `swift test` で押さえる）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run・webhook と中継・保険のポーリング）。**dev-agent 自身の自動アップデート**（第 4.11 節。姉妹アプリから移植）。photogrammetry で「push → 合図 → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
 | **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド。コメント）と dev-agent の往復（手元のビルド。check run）が同じ本文を出す。push から結果まで 10 分以内 |
 | **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。M0(b) の成績で「高い」と出た仕事から `local` を既定にし、昇格の規則を入れる | 実機の失敗から dev-agent が直しのブランチへ push した修正を、クラウドが取り込んで CI が緑になる例が 1 つできる。そのうち Anthropic を呼ばずに済んだ割合を付録 B に書く |
 | **M4 残りのアダプタ＋囲いの第 2・3 層** | probe-plugin・web・ios-app。Containerization の VM（Node / Python / Rust）と Seatbelt のプロファイル。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` と `dev-agent.policy.yaml` を持つ。portal のビルドとテストがホストに Node を入れずに通る |
@@ -1023,6 +1113,8 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 19 | 歯止めの出どころ（issue #2） | **マニフェストを 2 つに分ける。確かめ方（`build` / `round` / `expect` / `artifact` / `context`）は `dev-agent.yaml` に置いて PR の head から読み、歯止め（`agent` / `install` / `kind` 等）は `dev-agent.policy.yaml` に置いてハーネス（`.claude/`・`CLAUDE.md`）とともに既定ブランチ（`default_branch`。PR の base ではない）から読む**。取り違えた節はスキーマのエラーにする。エージェントが書いてよいパスは**許可制で既定は拒否**（`agent.paths.allow` から `paths.deny` を除いたもの）。両マニフェスト・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に禁じ、マニフェストでは開けない。判定は `git diff --no-renames` と大文字小文字を区別しない照合で決定的に行う。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は #20 |
 | 20 | 直しの push（issue #3） | **エージェントには GitHub の資格情報を渡さず、囲いから github.com へも出さない。直しは dev-agent が周の始めの sha の上の 1 つの commit（`DevAgent[bot]`）にまとめ、囲いの外の push 用のリポジトリで書いてよいパスを検査し、手元の 1 周が通ったものだけを App の installation token（Contents: write）で直しのブランチ `dev-agent/pr-<N>/r<round>` へ push する**。PR のブランチへは push しない。head の check run は `failure` のまま `fix_branch=` / `base=` / `fix=` / `compare=` を書き、直しの sha にも `success` の check run を付ける。**取り込むかはクラウドが決める**（fast-forward か cherry-pick。人も同じ手順で取り込める）。積み上げの PR は作らない。各リポジトリの `build.yml` は `dev-agent/**` への push で CI を走らせない。直しのブランチは「取り込まれた／新しい直しに置き換えられた／PR が閉じた」ときだけ消し、期限では消さない。書けるブランチを GitHub のルールセットで絞ることはせず、dev-agent のコード（`dev-agent/` 以外の refspec を作らない・`--force` を使わない・`dev-agent/` 以外を消さない）で守る（第 4.2・4.3・4.6・4.7・4.10 節）。予算の単位は issue #15 で決める |
 
+| 21 | 公開する前の伏せ字（issue #4） | **GitHub へ出ていく文字列（check run の `title`・`summary`・`text`・annotations、issue への 1 行）は、投稿の直前に Core の `Redactor` を必ず通す。その出力の型 `PublicText` は Core の外から作れず、GitHub への書き込み関数は `PublicText` しか受け取らない**（伏せ字を通らない経路を型で作れなくする）。順番は「揃える（ANSI 除去・NFC）→ 伏せ字 → 組み立て → 削る」で、前の周も生の記録から毎回組み立て直す。伏せるのは、dev-agent が持つ秘密の完全一致（App の鍵・webhook secret・中継の URL・installation token と JWT。エンコードした形も）・秘密の形（`ghp_` / `github_pat_` / `sk-` / `-----BEGIN` など）・秘密らしい名前の変数の値・ホームと `$TMPDIR`・ユーザー名・氏名・コンピュータ名・機器の識別子・手元の git の email。伏せた結果に完全一致の秘密が残る、または値を集められないときは本文を載せない。伏せる前の記録は手元（`~/Library/Logs/dev-agent/rounds/`）にだけ残す。直しの commit の足した行にも同じ検出をかけ、当たれば push しない。漏れたときは `dev-agent scrub` で check run の `output` を上書きし、秘密を作り直す（第 4.3・4.6・4.7・4.8・4.10 節） |
+
 ### 決めてほしいこと
 
 いまは無い。新しい論点が出たらここに番号を振って足し、決まったら上の表へ移す。
@@ -1042,6 +1134,8 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 合図 | App の webhook が中継（smee.io）を通って dev-agent に届くイベント。本文は信じず、PR 番号だけ取り出して API で読み直す |
 | check run | dev-agent が GitHub App として PR の head に作る実機の結果。名前 `DevAgent / <kind> (macOS)` |
 | 直しのブランチ | ローカルの直しを載せて dev-agent が push するブランチ `dev-agent/pr-<N>/r<round>`。PR の head の直上に 1 commit だけを置き、取り込むかはクラウドが決める |
+| 伏せ字（`Redactor`） | GitHub へ出す前に、秘密・ホーム・ユーザー名などを `[redacted:<種類>]` や `~` に置き換える Core の純ロジック。出力の型 `PublicText` だけが GitHub へ書ける |
+| 周の記録 | `~/Library/Logs/dev-agent/rounds/` に残す、伏せる前の本文・ログ・画面。手元の GUI だけが見せる |
 | push 用のリポジトリ | データ領域の `state/push/<repo>.git`。dev-agent が直しの commit を作り、検査し、push する bare リポジトリで、エージェントの囲いからは見えない |
 
 ## 付録 A. 参照した資料
