@@ -9,6 +9,12 @@
 > ブランチから読む）の 2 つに分け、ハーネスも既定ブランチから渡す。エージェントが
 > 書いてよいパスは許可制（既定は拒否）にし、dev-agent が常に禁じるパスを持つ
 > （第 4.4・4.6・4.7 節、第 7 節 #19）。
+>
+> v1.2 案（2026-10-02）: 設計レビュー 1-2（issue #3）を反映。エージェントには GitHub の
+> 資格情報を渡さず、囲いから github.com へも出られないようにする。直しは dev-agent が
+> 1 つの commit にまとめ、検査と手元の 1 周を通ったものだけを PR のブランチではなく
+> **直しのブランチ**（`dev-agent/pr-<N>/r<round>`）へ App のトークンで push する。
+> 取り込むかはクラウドが決める（第 4.2・4.3・4.6・4.7・4.10 節、第 7 節 #20）。
 
 ## 0. 要約
 
@@ -30,6 +36,9 @@
   宣言しておき**、dev-agent が PR ごとの依頼と合わせてローカルエージェントへ渡す。
   直してよい範囲などの歯止めは別ファイル `dev-agent.policy.yaml` に置き、PR からは
   変えられないよう既定ブランチから読む。
+- **ローカルの直しは PR のブランチへ直接入れない。** エージェントは GitHub の資格情報を
+  持たず、dev-agent が検査と手元の 1 周を通った直しだけを**直しのブランチ**へ push し、
+  check run に書く。PR へ取り込むかはクラウドが差分を読んで決める（第 4.2・4.7 節）。
 - **環境はアプリが抱える。** ローカル LLM の実行基盤・ビルドの道具（Node・Python・
   CMake・Vectorworks SDK）・Claude Code・モデル・作業用の worktree は、すべて dev-agent が
   同梱するか初回に取り寄せ、**アプリのデータ領域の中だけ**に置く。Mac を入れ替えても
@@ -143,7 +152,7 @@
 | **Apple Containerization**（macOS 26。`container` CLI と Swift パッケージ。1.0 は 2026-06） | Linux コンテナを 1 つずつ軽量 VM で動かす。Docker Desktop 不要。Swift パッケージとしてアプリに組み込める | **採用（Linux 向けの道具のサンドボックス）** | Node・Python・Rust のように Linux でも同じに動く道具は、dev-agent が組み込んだ Containerization の VM の中で動かし、worktree だけをマウントする。イメージと VM の中身はアプリのデータ領域に置く。**macOS 26 と Apple Silicon が要る**（M0 で組み込みの可否を確かめる） |
 | **Docker Desktop**（導入済み） | Linux コンテナ | **使わない（代替は上記）** | 別途入れて保守する物が 1 つ増える。Apple Containerization が組み込めない事情が出たときの退避先として残す |
 | **Claude Code（CLI 本体）** | 頭脳の実行器。native 版は `~/.local/bin` 固定で置き場所を変えられない | **採用（npm 版をデータ領域へ入れる）** | 同梱した Node で `npm install -g --prefix <データ領域>` し、`CLAUDE_CONFIG_DIR` もデータ領域へ向ける。版は dev-agent 側で固定し（`DISABLE_AUTOUPDATER=1`）、更新は dev-agent のリリースで行う。ログイン（claude.ai の OAuth）だけはブラウザで 1 度人が行う |
-| **GitHub App（自作・個人所有）** | (1) **webhook**: PR・ラベル・コメント・push のイベントを、App に設定した 1 つの URL へ署名付き（HMAC-SHA256）で送る。(2) **Checks API**: check run（PR の Checks タブと状態欄に出る。`output.text` に長文、annotations）を作れるのは **GitHub App だけ**（公式: "To create a check run, you must use a GitHub App"） | **採用（気付きと結果の両方）** | 利用者が自分の GitHub App「DevAgent」を 1 度作り、5 リポジトリに入れる。秘密鍵と webhook secret は dev-agent のキーチェーンへ。dev-agent は JWT → installation token を自分で発行する（Security フレームワークの RSA 署名。依存は増えない）。投稿者が `devagent[bot]` になるので、人の発言と機械の出力が見分けられる。クラウドセッションの PR 購読は check suite の失敗と成功のまとめを配信するので、**結果が出た瞬間にクラウドが起きる**。webhook の届け先は次項 |
+| **GitHub App（自作・個人所有）** | (1) **webhook**: PR・ラベル・コメント・push のイベントを、App に設定した 1 つの URL へ署名付き（HMAC-SHA256）で送る。(2) **Checks API**: check run（PR の Checks タブと状態欄に出る。`output.text` に長文、annotations）を作れるのは **GitHub App だけ**（公式: "To create a check run, you must use a GitHub App"） | **採用（気付き・結果・直しのブランチの push）** | 利用者が自分の GitHub App「DevAgent」を 1 度作り、5 リポジトリに入れる。秘密鍵と webhook secret は dev-agent のキーチェーンへ。dev-agent は JWT → installation token を自分で発行する（Security フレームワークの RSA 署名。依存は増えない）。投稿者が `devagent[bot]` になるので、人の発言と機械の出力が見分けられる。クラウドセッションの PR 購読は check suite の失敗と成功のまとめを配信するので、**結果が出た瞬間にクラウドが起きる**。webhook の届け先は次項 |
 | **webhook の中継（smee.io）** | GitHub（probot）が運用する webhook の中継。送られた webhook を、ランダムな URL のチャネルに**外向きの SSE で購読している側へ**そのまま（ヘッダごと）流す。Mac に口を開けない。無料・設定ゼロ | **採用（リアルタイムに気付く経路。真実は API で読み直す）** | App の webhook URL を smee のチャネルにし、dev-agent が SSE で待ち受ける。**中継が運ぶのは「合図」だけ**で、dev-agent は合図を受けたら GitHub API で PR・ラベル・head を読み直してから動く（中継が偽物を流しても、無駄な API 呼び出しが 1 回起きるだけ）。加えて webhook の署名を App の secret で検証する。届かない・途切れることはあるので、60 秒の ETag 付きポーリングを**取りこぼしの保険**として残す。中継を自前にしたくなったら Cloudflare Workers 等に置き換えられる（dev-agent 側は URL を変えるだけ） |
 | **Tailscale / Cloudflare Tunnel / ngrok** | クラウドから Mac へ届く口を作る | **使わない** | クラウドセッションの egress は許可リスト制で、しかも Mac に口を開ける必要が無い。連絡は GitHub（ラベル・コメント・リリース）と Remote Control の外向き接続で足りる |
 
@@ -174,7 +183,7 @@
         ┌──────────────────── GitHub（唯一の連絡路）────────────────────┐
         │ PR（ラベル・push）  check run（実機の結果）  レビュー  CI（ビルド・配布）│
         └──▲────────────┬───────────────▲───────────────────▲───────────┘
-           │依頼        │webhook（合図）  │結果               │push
+           │依頼        │webhook（合図）  │結果               │push（直しのブランチ）
            │（ラベル）   │ ↓ 中継（smee）  │（check run）      │
            │            ▼ SSE で受ける    │                   │
    ┌───────┴──────────────┐      ┌───────┴───────────────────┴───────────────────┐
@@ -206,7 +215,7 @@
 - **Remote Control は人の窓。** 人が外出先から Mac の Claude Code を使うためのもので、
   エージェント同士の経路にはしない（第 4.6 節）。
 - **dev-agent は LLM を持たない。** 見張る・ビルドする・入れ替える・走らせる・回収する・
-  投稿するは全部決定的な処理で、テストできる。考える必要があるときだけ AgentBridge が Claude Code を
+  投稿する・直しを push するは全部決定的な処理で、テストできる。考える必要があるときだけ AgentBridge が Claude Code を
   起こす。
 
 ### 4.2 1 周の流れ（往復の単位）
@@ -224,14 +233,20 @@
  5. 結果を head の check run に書く（名前 `DevAgent / <kind> (macOS)`。本文はアプリが作ったもの）
       ビルド開始で in_progress、終わりで success / failure / neutral
  6. 失敗していて、マニフェストが直しを許していれば AgentBridge が Claude Code を起こす
-      - 同じ worktree で、失敗ログ＋期待＋許した範囲を渡す
-      - エージェントが終わるたびに、dev-agent が変えたパスがすべて書いてよいパスに収まって
-        いるかを `git diff` で決定的に確かめる（第 4.7 節）。外れていたら変更を捨てて failure で止まる
+      - 同じ worktree で、失敗ログ＋期待＋許した範囲を渡す。GitHub の資格情報は渡さず、
+        囲いから github.com へも出られない（第 4.7 節）。エージェントは worktree を編集するだけ
+      - エージェントが終わったら、dev-agent が変更を周の始めの sha の上の 1 つの commit に
+        まとめて push 用のリポジトリへ取り込み、そこで変えたパスがすべて書いてよいパスに
+        収まっているかを `git diff` で決定的に確かめる（第 4.7 節）。外れていたら変更を捨てて
+        failure で止まる
       - 直したら push せずにまず 4 を手元で回し直す（ビルド → 入れ替え → 走らせる）
-      - 手元で通ったものだけ PR のブランチへ push する（CI が最終の門。周数と時間に上限）
+      - 手元で通ったものだけを、PR のブランチではなく**直しのブランチ**
+        `dev-agent/pr-<N>/r<round>` へ push し、head の check run に「直しを用意した」と書く
+        （周数と時間に上限）
       - 直せなければ、試したことを check run の summary に書いて failure で止まる
  7. クラウドエージェントが check run の失敗（または成功のまとめ）で起き、`get_check_run` で
-      結果を読んで次の手を決める（設計変更・人へ質問・マージ待ち）。周ごとに起こさず、
+      結果を読んで次の手を決める（直しのブランチを取り込む・設計変更・人へ質問・マージ待ち）。
+      直しを取り込めば PR の head が動き、CI（最終の門）と次の周が走る。周ごとに起こさず、
       **周が結論に達したときだけ**起きる
  8. 人は PR と dev-agent の画面で経過を見て、「確認できた」を宣言する／止める
 ```
@@ -298,8 +313,9 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
 
 - **同じ head で周を重ねる**（手元の直しを試しているとき）は、同じ check run を PATCH で
   更新し、`output.text` の先頭に最新の周、以下に前の周を残す。
-- **エージェントが push したら**新しい head に新しい check run ができる。`summary` に
-  「dev-agent が round N の失敗を直して push した（commit …）」と書く。
+- **直しを用意したら**、head の check run は `failure` のまま、`title` を
+  「round N: 失敗 → 直しを `dev-agent/pr-<N>/r<round>` に用意（手元の 1 周は通過）」にし、
+  `summary` に下の「直しのブランチ」の決まった行を書く。
 - **直せずに止まった**ときは `failure` にし、`summary` に試したこと・残っている失敗・
   人かクラウドに頼みたいことを書く。これが従来の `gave-up` コメントの代わり。
 - **画面**（スクリーンショット）は check run の `images` に載せられるが、公開 URL が要る。
@@ -317,13 +333,35 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
   だけ**で、実行の判断（本人の PR か・ラベルがあるか・head は何か）を dev-agent が API で
   読み直して行う点が違う。
 
+#### ローカル → クラウド: 直しのブランチ（取り込むかはクラウドが決める）
+
+ローカルの直しは **PR のブランチへ直接入れず**、dev-agent が別のブランチへ push する。
+理由は 3 つ。(1) エージェントに push の資格情報を持たせずに済む（第 4.7 節）。(2) PR の
+ブランチへ push するのはクラウド（と人）だけになり、ローカルとクラウドが同じブランチへ
+同時に push して衝突することが構造的に無くなる。(3) 7〜9B 級のローカル LLM が書いた
+直しは、クラウド（か人）が差分を読んでから PR に入る。要らなければ放っておけばよい。
+
+| 項目 | 決めごと |
+| --- | --- |
+| 名前 | **`dev-agent/pr-<N>/r<round>`**。`round` はその PR の中で通した周の番号で、名前が重ならない。`dev-agent/pr-<N>` という名前そのものは作らない（git の ref が衝突するため） |
+| 起点 | 周の始めに固定した PR の head の sha。直しのブランチは必ずその**直上に 1 commit だけ**置く（第 4.7 節） |
+| 1 本まで | 同じ head への直しは 1 本まで。クラウドが取り込むか head が動くまで、次の直しは作らない（予算の単位は issue #15 で決める） |
+| head の check run | `failure` のまま（head そのものは失敗しているので）。`summary` に機械でも読める決まった行を書く: `fix_branch=dev-agent/pr-12/r4` / `base=<sha>` / `fix=<sha>` / `compare=https://github.com/<o>/<r>/compare/<base>...<fix>` / `brain=local\|haiku\|claude`。compare はブランチ名ではなく **sha 同士**で張る（PR のブランチが先へ進んでも、直しの差分だけが見える） |
+| 直しの commit の check run | 直しの sha にも `DevAgent / <kind> (macOS)` を `success`（`source=local`）で付ける。クラウドが fast-forward で取り込めば PR の head がこの sha になり、**結果が既にあるので dev-agent はその head をビルドし直さない**（周が 1 つ減る）。cherry-pick で取り込めば sha が変わるので、普通に 1 周回る |
+| クラウドの取り込み方 | 各リポジトリの `CLAUDE.md` に書く。PR の head が `base=` と同じなら `git merge --ff-only <fix>`、違えば cherry-pick（衝突したら直すか、取り込まない）。差分を読んで要らなければ何もしない。直しのブランチを main へ merge しない、そこから PR を作らない |
+| 人の取り込み方 | 同じ。compare の URL で差分を見て、手元で取り込む。積み上げの PR（直しのブランチ → PR のブランチ）は作らない（PR が増えるため。要るようになったら足す） |
+| CI | **各リポジトリの `build.yml` の push のトリガーから `dev-agent/**` を除く**。App のトークンでの push は workflow を起こすので、除かないと 30 分のビルドが二重に走り、`dev-<slug>` のプレリリースも直しの周ごとに増える。直しは PR へ取り込まれた時点で CI を通る。この変更は `.github/**` なのでエージェントには書けず、そのリポジトリを dev-agent へ移す PR で人かクラウドが入れる |
+| 消すとき | 次のどれかに当たったら dev-agent が消す: **取り込まれた**（直しの commit が PR の head の祖先になった、または `git cherry` で patch-id が一致した）／**同じ PR の新しい直しのブランチに置き換えられた**／**PR が閉じた**（merge を含む）。どれにも当たらない間は、**何日経っても消さない**（PR が開いている間は判断待ちで、期限で消すと後で使えたはずの直しを失う）。イベントの取りこぼし（Mac が止まっている間に PR が閉じた等）は、起動時と 1 時間ごとに `dev-agent/**` を一覧して上の条件を API で判定し直して拾う。クラウドが手直しして取り込んだため patch-id が一致しないものは、PR が閉じたときに消える |
+
 #### クラウド側の読み方
 
 クラウドセッションは `get_check_run` で `output` を読む。各リポジトリの
 `docs/DEVELOPMENT.md`「届いたコメントの読み方」は、dev-agent へ移るときに「check run の
 読み方」へ書き換える（本文の形式は変えないので、節の中身はほぼそのまま）。PR 購読は
 check suite の失敗と成功のまとめを配信するので、**周の途中では起きず、結論が出たときに
-起きる**。これが G7（使用量）にも効く。
+起きる**。これが G7（使用量）にも効く。`summary` に `fix_branch=` があれば、上の
+「直しのブランチ」の取り込み方に従って差分を読み、取り込むかを決める（取り込みの判断で
+起きるのは、この結論の 1 回に含まれる）。
 
 ### 4.4 マニフェスト（リポジトリごとの「期待する動作」）
 
@@ -334,7 +372,7 @@ check suite の失敗と成功のまとめを配信するので、**周の途中
 | ファイル | 中身 | 読む場所 | 理由 |
 | --- | --- | --- | --- |
 | **`dev-agent.yaml`**（確かめ方） | `version` / `build` / `round` / `expect` / `artifact` / `context` | **PR の head** | PR がビルド手順や試験を変えたら、その PR で効かないと困る。CI が走らせる `build.yml` と同じ信頼水準（本人の PR だけ。第 4.7 節）で、ビルドと実行は囲いの中（第 4.10 節） |
-| **`dev-agent.policy.yaml`**（歯止め） | `version` / `name` / `kind` / `platforms` / `install` / `agent` | **既定ブランチ** | `agent`（`brain`・`escalate`・`allowed`・`paths`・`budget`・`push_to`）を head から読むと、エージェントが直しの中で書き換え、次の周から自分の制約を外せる。`install` の置き場所（`plugins_dir` など）は**囲いの外への書き込み**で、Seatbelt の例外もここから作るので、head から読むと `~/Library/LaunchAgents` のような場所へ置かせられる。`kind` 等はどのアダプタを動かすかの選択 |
+| **`dev-agent.policy.yaml`**（歯止め） | `version` / `name` / `kind` / `platforms` / `install` / `agent` | **既定ブランチ** | `agent`（`brain`・`escalate`・`allowed`・`paths`・`budget`）を head から読むと、エージェントが直しの中で書き換え、次の周から自分の制約を外せる。`install` の置き場所（`plugins_dir` など）は**囲いの外への書き込み**で、Seatbelt の例外もここから作るので、head から読むと `~/Library/LaunchAgents` のような場所へ置かせられる。`kind` 等はどのアダプタを動かすかの選択 |
 
 1 つのファイルを節ごとに読み分ける形も考えたが、分けるほうを採る。
 
@@ -452,7 +490,7 @@ agent:                                      # 直してよい範囲
       - "src/Extensions/**"                 # 殻（再起動を強いる）
       - "src/Payload*"
   budget: { rounds: 3, minutes: 60 }
-  push_to: pr-branch                        # PR のブランチへ直接 push（クラウドと同じ運用）
+  # push 先は選べない。直しは常に dev-agent/pr-<N>/r<round> へ（第 4.3 節）
 ```
 
 決めごと:
@@ -550,8 +588,8 @@ Claude を使うと、肝心の設計・実装（クラウド）の分が減る�
 - **昇格の規則は 1 か所**（`agent.escalate`）。local が「直せた」と言っても、手元の 1 周
   （ビルド → 入れ替え → 走らせる）が通らなければ直せていない。通らなかったら claude へ。
   claude でも通らなければ失敗で止まる。
-- **push 前に手元で 1 周回す。** 通ったものだけ push する。CI（30 分のビルド）は最終の門に
-  残る。
+- **push 前に手元で 1 周回す。** 通ったものだけ、直しのブランチへ push する（第 4.3 節）。
+  取り込むかはクラウドが決め、CI（30 分のビルド）は取り込んだ後の最終の門に残る。
 - **予算で止まる。** `budget.rounds` と `budget.minutes` を超えたら `failure` にして
   クラウドと人へ返す。無限に直し続けない。
 
@@ -621,8 +659,16 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
 
    判定は LLM に頼らず、エージェントが終わるたびに（手元の 1 周を回し直す前に）
    dev-agent が行う。
-   - 比べるのは「周の始めの sha（PR の head）」と「エージェントの後の worktree」
-     （commit 済みのものと、未 commit・未追跡のものの両方）。`git diff --name-only
+   - **エージェントは commit しない（しても使わない）。** エージェントが終わったら、
+     dev-agent が worktree の中身（commit 済み・未 commit・未追跡のすべて）から tree を作り、
+     周の始めの sha（PR の head）を親にした **1 つの commit** として、エージェントの囲いの
+     外にある push 用のリポジトリ（第 7 項）へ取り込む。author と committer は
+     `DevAgent[bot]`、trailer に `Dev-Agent-Round:`・`Dev-Agent-Base:`・`Dev-Agent-Brain:`
+     （`local` / `haiku` / `claude`）を付ける。エージェントの commit をそのまま使わないのは、
+     author を人の名前に偽れること、merge commit や複数の commit が混ざることを避けるため。
+   - 判定は**その push 用のリポジトリの中で**、周の始めの sha と上の commit を比べて行う。
+     判定したものと push するものが同じ commit になり、判定と push の間に worktree を
+     すり替えられても効かない。`git diff --name-only
      --no-renames -z` を使う（改名検出があると、`.github/x.yml` を `x.yml` へ移した
      ときに新しい名前しか出ない。`-z` は改行を含む名前のため）。変更・追加・削除の
      **すべてのパスが**書いてよいパスに収まっていなければならない（改名は削除＋追加と
@@ -631,8 +677,9 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
      `.CLAUDE/settings.json` は次の checkout で `.claude/settings.json` として読まれる）。
      Unicode も NFC に揃えてから比べる。照合は Core の純ロジックにし、`swift test` で
      こうした抜け道を押さえる。
-   - **シンボリックリンクの追加・変更も止める**（`git diff --raw` で mode `120000`）。
-     リンク越しに worktree の外や禁止のパスへ書かせないため。
+   - **シンボリックリンクとサブモジュールの追加・変更も止める**（`git diff --raw` で
+     mode `120000` と `160000`）。リンク越しに worktree の外や禁止のパスへ書かせないため、
+     また `.gitmodules` を禁じても gitlink だけで別の commit を指させないため。
    - 外れていたら、その周の変更を捨てて（worktree を周の始めの sha に戻す）`failure` に
      し、`summary` に外れたパスを書く。**昇格はしない**（直せなかったのではなく、
      範囲を破ったので）。
@@ -645,15 +692,41 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
    範囲だけ（Vectorworks は既存の `vw-uninstall.sh` の歯止めをそのまま使う）。
 6. **止める手段を 2 つ持つ。** ラベル `dev-agent:stop`（PR 単位）と、dev-agent の
    画面／CLI の「すべて止める」（Mac 単位）。
-7. **GitHub の資格情報は dev-agent だけが持つ。** 自作の GitHub App「DevAgent」の
-   秘密鍵と webhook secret を macOS キーチェーン（service `dev-agent`）に。権限は
-   Checks（Read/Write）・Pull requests（Read。ラベルとコメントを読む）・Issues（Write。
-   プローブの issue 宛ての 1 行だけ）・Contents（Read。Releases の取得）・Metadata。
-   installation token は短命で、dev-agent が都度発行する。push はエージェントが `gh` の
-   資格情報で行う（App のトークンでは push しない）。**各アプリからトークンの扱いが
-   消える。**
-8. **秘密をプロンプトに載せない。** AgentBridge はトークン・鍵をエージェントの環境変数にも
-   プロンプトにも渡さない。
+7. **GitHub の資格情報は dev-agent だけが持ち、push も dev-agent が行う。** 自作の
+   GitHub App「DevAgent」の秘密鍵と webhook secret を macOS キーチェーン（service
+   `dev-agent`）に。権限は Checks（Read/Write）・Pull requests（Read。ラベルとコメントを
+   読む）・Issues（Write。プローブの issue 宛ての 1 行だけ）・**Contents（Read/Write。
+   Releases の取得と、直しのブランチの push・削除）**・Metadata。Workflows の権限は
+   付けないので、`.github/workflows/` を変える push は GitHub 側でも拒まれる（常時禁止との
+   二重の門）。installation token は短命で、dev-agent が都度発行する。**各アプリから
+   トークンの扱いが消える。**
+   - **push はデータ領域の push 用のリポジトリ**（`state/push/<repo>.git`。bare。エージェントの
+     囲いからは見えも書けもしない）から行う。worktree から `git push origin` はしない。
+     worktree の `.git/config` はエージェントが手を入れた可能性があり、`remote.origin.url`
+     や `url.<x>.insteadOf` を書き換えられていると、トークンが別のホストへ送られるため。
+   - push は**エージェントのプロセスが残っていないとき**だけ、明示した URL と refspec で
+     行う: `git push https://github.com/<o>/<r>.git <fix>:refs/heads/dev-agent/pr-<N>/r<round>`。
+     トークンは `GIT_ASKPASS` で渡し、ディスクにも引数にも残さない。
+   - **書いてよいブランチを GitHub 側では絞らない**（決定。App の Contents: write は
+     全ブランチに効き、ルールセットで絞ると人・クラウド・CI の push まで例外の一覧で
+     管理することになるため）。既定ブランチだけは第 7 節 #19 のルールセットで守られ、DevAgent は
+     その例外に入れない。それ以外のブランチは dev-agent のコードで守る: 書き先の
+     refspec は `refs/heads/dev-agent/` で始まるものしか組み立てない、**`--force` を一切
+     使わない**（GitHub は早送りにならない push を拒むので、不具合が起きても他のブランチの
+     commit は消えず、余計な commit が載るまでに留まる）、ブランチの削除は `dev-agent/`
+     で始まる名前にだけ行う。これらは Core の純ロジックにして `swift test` で押さえる。
+   - Contents: write は Releases と tags も書ける。トークンは dev-agent の外へ出ず、
+     dev-agent はそれらを書くコードを持たないので、残りのリスクとして受け入れる。
+8. **秘密をエージェントに渡さず、手も届かせない。** AgentBridge はトークン・鍵を
+   エージェントの環境変数にもプロンプトにも渡さない。それだけでは同じユーザーで動く
+   Bash から人の資格情報（Xcode の git が既定で使う `credential.helper=osxkeychain`、
+   `~/.config/gh`、`~/.ssh` と `SSH_AUTH_SOCK`、`~/.netrc`、`~/.git-credentials`）に届くので、
+   **エージェントの囲いから github.com・api.github.com へは出られない**ようにする
+   （Claude Code のサンドボックスのネットワーク許可を、同梱 Ollama の 127.0.0.1 と
+   api.anthropic.com だけにする）。あわせて Seatbelt で上のファイルとキーチェーン
+   （`com.apple.SecurityServer`）を拒み、`HOME` をデータ領域へ向け、`SSH_AUTH_SOCK` を外し、
+   `GIT_CONFIG_NOSYSTEM=1`・`GIT_CONFIG_GLOBAL=/dev/null` で起こす（第 4.10 節）。
+   資格情報を見つけられても、push する道が無い。
 9. **ビルドと実行は囲いの中で。** Linux で動く道具は Containerization の VM（worktree だけ
    マウント）、Mac でしか動かないもの（Xcode・Vectorworks SDK・Vectorworks 本体）は
    Seatbelt（`sandbox-exec`）で「worktree とデータ領域以外へ書けない」プロファイルの下で
@@ -677,15 +750,17 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
     `FileManager` / `screencapture`）。判断を置かない。
   - `Sources/DevAgentBuilder/` … worktree の管理（`git worktree add` / fetch / checkout）と
     `build` 節の実行。PR ごとに `~/Library/Caches/dev-agent/<repo>/pr-<N>/{src,build}` を
-    保ち、差分ビルドを効かせる。PR が閉じたら消す。
+    保ち、差分ビルドを効かせる。PR が閉じたら消す。エージェントの後の worktree から直しの
+    commit を作り、push 用のリポジトリへ取り込む（第 4.7 節）。
   - `Sources/DevAgentToolchains/` … 道具の保管庫（第 4.10 節）。`toolchains.yaml`（版・URL・
     SHA-256・同梱か取り寄せか）を読み、同梱物の展開・取り寄せ・検証・環境変数の組み立て。
   - `Sources/DevAgentSandbox/` … Containerization の VM の起動とマウント、Seatbelt の
     プロファイル生成。判断を置かない。
   - `Sources/DevAgentGitHub/` … GitHub App の JWT（RS256。Security フレームワーク）と
     installation token、check run の作成と更新、PR・ラベル・コメント・Releases の読み取り
-    （ETag 付き）、webhook の署名検証。判断を置かない。check run の本文の組み立ては
-    Core（純ロジック）。
+    （ETag 付き）、webhook の署名検証、直しのブランチの push と削除。判断を置かない。
+    check run の本文の組み立て、push の refspec の組み立て（`dev-agent/` 以外を作らない）、
+    直しのブランチを消すかの判定（第 4.3 節）は Core（純ロジック）。
   - `Sources/DevAgentWatch/` … 中継（smee.io）への SSE 購読と、保険のポーリングの時計。
     受けた合図を「この PR を読み直せ」に落とすだけで、判断を置かない。
   - `Sources/dev-agent/` … CLI。`setup`（道具とモデルを揃え、App の鍵と中継を設定する）／
@@ -703,7 +778,8 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
   Containerization の 2 つだけ**を許す。姉妹アプリの「外部依存ゼロ」はそのままで、
   dev-agent だけが持つ。
 - **状態の置き場**: `~/Library/Application Support/dev-agent/state/<repo>/<pr>.json`
-  （周・最後に見た head・最後に投稿した時刻・予算の消費）。ビルドの中間物は
+  （周・最後に見た head・最後に投稿した時刻・予算の消費・直しのブランチの一覧）。
+  push 用のリポジトリは `state/push/<repo>.git`。ビルドの中間物は
   `~/Library/Caches/dev-agent/`（消えても作り直せるもの）。Vectorworks の
   `feedback.txt` と同じ役目をここへ移す。
 - **気付き方**: App の webhook → smee.io → SSE（数秒）＋ 60 秒の ETag 付きポーリング
@@ -740,7 +816,7 @@ dev-agent へ移る PR で「DevAgent の check run の読み方」に書き換�
 | Xcode（Metal ツールチェーン込み） | 10 GB 超で再配布できない | `doctor` が `xcode-select` と Metal ツールチェーンの有無を見る。足りなければ `xcodebuild -downloadComponent MetalToolchain` を提案する |
 | Vectorworks 2026 本体 | 確かめる対象そのもの | 起動・終了だけ行う |
 | claude.ai のログイン | OAuth はブラウザで人が行う | 初回に `claude auth login` を開く。資格情報はキーチェーン |
-| GitHub App「DevAgent」 | 人が 1 度作り、5 リポジトリに入れる（Checks の write と webhook が要る） | 初回に App ID・秘密鍵（.pem）・webhook secret を受け取りキーチェーンへ。webhook URL は `setup` が作った smee のチャネル。M5 で GitHub の manifest flow（1 クリックで App を作る）に置き換える |
+| GitHub App「DevAgent」 | 人が 1 度作り、5 リポジトリに入れる（Checks と Contents の write、webhook が要る） | 初回に App ID・秘密鍵（.pem）・webhook secret を受け取りキーチェーンへ。webhook URL は `setup` が作った smee のチャネル。M5 で GitHub の manifest flow（1 クリックで App を作る）に置き換える |
 | iPhone の署名証明書（任意） | Apple Developer のもの | `run-ios.sh` がキーチェーンから引く |
 
 #### アプリが抱えるもの（データ領域）
@@ -751,7 +827,8 @@ dev-agent へ移る PR で「DevAgent の check run の読み方」に書き換�
   models/             同梱 Ollama のモデル（OLLAMA_MODELS）
   containers/         Containerization のイメージと VM の rootfs
   claude-config/      CLAUDE_CONFIG_DIR（settings・セッション・記憶）
-  state/              <repo>/<pr>.json（周・head・予算）
+  state/              <repo>/<pr>.json（周・head・予算・直しのブランチ）
+                      push/<repo>.git（直しを検査して push する bare リポジトリ。エージェントの囲いの外）
   toolchains.lock     実際に展開した版と SHA-256
 ~/Library/Caches/dev-agent/
   <repo>/pr-<N>/{src,build}   worktree と差分ビルドの中間物
@@ -800,7 +877,7 @@ dev-agent の中に 1 つの表 `toolchains.yaml` を持ち、**各道具の版�
 | --- | --- | --- |
 | 1. 置き場所 | 全部 | 上の環境変数で、書き込み先をデータ領域と worktree に限る。これが土台で、残り 2 層が無くても「消せば戻る」は成り立つ |
 | 2. Linux 向けの道具 | Node / Python / Rust のビルド・テスト・Playwright | dev-agent が組み込んだ Containerization の VM。worktree と必要なキャッシュだけマウントし、ネットワークは npm / PyPI / crates.io に限る。ホストの `$HOME` は見えない |
-| 3. Mac でしか動かないもの | Xcode のビルド・Vectorworks SDK のビルド・Vectorworks 本体・エージェントの `claude -p` | Seatbelt（`sandbox-exec`）のプロファイルで、書き込みを worktree・データ領域・一時ディレクトリに限る。Vectorworks の Plug-Ins フォルダだけ例外で許す（例外のパスは既定ブランチの `dev-agent.policy.yaml` の `install` から作る。第 4.4 節）。`claude -p` は Claude Code 自身のサンドボックス設定（Bash の囲い）も有効にし、そのプロファイルでは worktree の git ディレクトリの `config` と `hooks/` への書き込みを外す（第 4.7 節） |
+| 3. Mac でしか動かないもの | Xcode のビルド・Vectorworks SDK のビルド・Vectorworks 本体・エージェントの `claude -p` | Seatbelt（`sandbox-exec`）のプロファイルで、書き込みを worktree・データ領域・一時ディレクトリに限る。Vectorworks の Plug-Ins フォルダだけ例外で許す（例外のパスは既定ブランチの `dev-agent.policy.yaml` の `install` から作る。第 4.4 節）。`claude -p` は Claude Code 自身のサンドボックス設定（Bash の囲い）も有効にし、そのプロファイルでは worktree の git ディレクトリの `config` と `hooks/` への書き込みを外し、データ領域の `state/`（push 用のリポジトリを含む）は読み書きとも拒む。さらに人の資格情報（`~/.config/gh`・`~/.ssh`・`~/.netrc`・`~/.git-credentials`・キーチェーン）を拒み、ネットワークは同梱 Ollama と api.anthropic.com だけにする（github.com へは出られない。第 4.7 節） |
 
 第 2 層は **macOS 26 でしか使えない**ので、`doctor` が版を見て、26 未満なら第 3 層だけで
 動かす（機能は落ちない。囲いが弱くなるだけ）。Docker Desktop はどちらの層にも使わない。
@@ -907,10 +984,10 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 
 | 段 | 何をするか | 終わりの印 |
 | --- | --- | --- |
-| **M0 検証スパイク（作る前に確かめる）** | (a) GitHub App の webhook → smee.io → SSE で、ラベル付けから dev-agent が気付くまでの秒数と、1 日の取りこぼし率（ポーリングが拾った件数）を測る。launchd agent から `open -a "Vectorworks 2026"` と `xcodebuild` が**ログイン中のユーザーの画面で**動くか（GUI と Metal が使えるか）も確かめる。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) 自作 GitHub App の installation token で check run を作り、`output.text` に 60 KB の本文を載せ、クラウドセッションの PR 購読がその失敗で起きるか・`get_check_run` で読めるか。(k) **head のハーネスを読ませない起こし方**: worktree に「起動で印のファイルを作る hook」「`bypassPermissions`」「`.mcp.json` のサーバ」「skill」を仕込み、第 4.6 節の組み立て（`--setting-sources`・`--settings`・`--strict-mcp-config`・`--append-system-prompt`）で `claude -p` を起こして、どれも効かないこと、既定ブランチから渡した hooks と deny は効くことを確かめる | 各項目の結果を本書の付録に書く。(k) で効いてしまう種類があれば、第 4.6 節の「PR がそれを変えていたらエージェントを起こさない」をその種類に適用する。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
+| **M0 検証スパイク（作る前に確かめる）** | (a) GitHub App の webhook → smee.io → SSE で、ラベル付けから dev-agent が気付くまでの秒数と、1 日の取りこぼし率（ポーリングが拾った件数）を測る。launchd agent から `open -a "Vectorworks 2026"` と `xcodebuild` が**ログイン中のユーザーの画面で**動くか（GUI と Metal が使えるか）も確かめる。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) 自作 GitHub App の installation token で check run を作り、`output.text` に 60 KB の本文を載せ、クラウドセッションの PR 購読がその失敗で起きるか・`get_check_run` で読めるか。(k) **head のハーネスを読ませない起こし方**: worktree に「起動で印のファイルを作る hook」「`bypassPermissions`」「`.mcp.json` のサーバ」「skill」を仕込み、第 4.6 節の組み立て（`--setting-sources`・`--settings`・`--strict-mcp-config`・`--append-system-prompt`）で `claude -p` を起こして、どれも効かないこと、既定ブランチから渡した hooks と deny は効くことを確かめる。(l) **エージェントが push できないことと、dev-agent の push の道**: 第 4.7 節の囲い（ネットワーク許可・Seatbelt・環境）の下の `claude -p` の Bash から、`git push`（osxkeychain・SSH・`~/.config/gh` のいずれを使っても）・`gh`・`security find-internet-password` が**すべて失敗する**こと。App の installation token（Contents: write、Workflows なし）で `dev-agent/pr-<N>/r<round>` への push と削除ができ、既定ブランチへは拒まれ、`.github/workflows/` を含む push も拒まれること。直しの sha に付けた check run が、fast-forward で取り込んだ後の PR の head でそのまま見え、dev-agent がビルドを飛ばせること | 各項目の結果を本書の付録に書く。(k) で効いてしまう種類があれば、第 4.6 節の「PR がそれを変えていたらエージェントを起こさない」をその種類に適用する。(l) でエージェントから push できる道が 1 つでも残れば、塞げるまで M3（直し）に進まない。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く |
 | **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run・webhook と中継・保険のポーリング）。**dev-agent 自身の自動アップデート**（第 4.11 節。姉妹アプリから移植）。photogrammetry で「push → 合図 → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
 | **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド。コメント）と dev-agent の往復（手元のビルド。check run）が同じ本文を出す。push から結果まで 10 分以内 |
-| **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。M0(b) の成績で「高い」と出た仕事から `local` を既定にし、昇格の規則を入れる | 実機の失敗から dev-agent が push した修正で CI が緑になる例が 1 つできる。そのうち Anthropic を呼ばずに済んだ割合を付録 B に書く |
+| **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。M0(b) の成績で「高い」と出た仕事から `local` を既定にし、昇格の規則を入れる | 実機の失敗から dev-agent が直しのブランチへ push した修正を、クラウドが取り込んで CI が緑になる例が 1 つできる。そのうち Anthropic を呼ばずに済んだ割合を付録 B に書く |
 | **M4 残りのアダプタ＋囲いの第 2・3 層** | probe-plugin・web・ios-app。Containerization の VM（Node / Python / Rust）と Seatbelt のプロファイル。`watch`（常駐）と launchd | 対象の 5 リポジトリすべてが `dev-agent.yaml` と `dev-agent.policy.yaml` を持つ。portal のビルドとテストがホストに Node を入れずに通る |
 | **M5 撤去と GUI と片付け** | 各アプリから Updater／往復の駆動を消す（第 4.9 節）。メニューバーアプリ（更新の確認・チャンネル選択・自動更新の停止を含む）。週 1 回の道具の版上げ PR。`uninstall` | Vectorworks の殻の `VW_SHELL_INPUTS` から `Updater*` と `FeedbackLoop*` が消える。クリーンな Mac に dev-agent を入れて `setup` だけで往復が回り、`uninstall` で残り物が無い |
 
@@ -943,7 +1020,8 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 17 | webhook の中継 | **smee.io** を使う。自前の中継へは URL を変えるだけで移れる（第 4.3 節） |
 | 18 | dev-agent 自身の更新 | **起動時と UI から確認し、自動で入れ替える**（周の最中は周の終わりまで待つ）。M1 から入れる（第 4.11 節） |
 | 11 | 頭脳の既定 | **ローカル LLM を既定にし、Claude は昇格したときだけ**。代用できる範囲は M0 の計測で詰め、付録 B で育てる（第 4.6 節・G7） |
-| 19 | 歯止めの出どころ（issue #2） | **マニフェストを 2 つに分ける。確かめ方（`build` / `round` / `expect` / `artifact` / `context`）は `dev-agent.yaml` に置いて PR の head から読み、歯止め（`agent` / `install` / `kind` 等）は `dev-agent.policy.yaml` に置いてハーネス（`.claude/`・`CLAUDE.md`）とともに既定ブランチ（`default_branch`。PR の base ではない）から読む**。取り違えた節はスキーマのエラーにする。エージェントが書いてよいパスは**許可制で既定は拒否**（`agent.paths.allow` から `paths.deny` を除いたもの）。両マニフェスト・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に禁じ、マニフェストでは開けない。判定は `git diff --no-renames` と大文字小文字を区別しない照合で決定的に行う。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は issue #3 で決める |
+| 19 | 歯止めの出どころ（issue #2） | **マニフェストを 2 つに分ける。確かめ方（`build` / `round` / `expect` / `artifact` / `context`）は `dev-agent.yaml` に置いて PR の head から読み、歯止め（`agent` / `install` / `kind` 等）は `dev-agent.policy.yaml` に置いてハーネス（`.claude/`・`CLAUDE.md`）とともに既定ブランチ（`default_branch`。PR の base ではない）から読む**。取り違えた節はスキーマのエラーにする。エージェントが書いてよいパスは**許可制で既定は拒否**（`agent.paths.allow` から `paths.deny` を除いたもの）。両マニフェスト・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に禁じ、マニフェストでは開けない。判定は `git diff --no-renames` と大文字小文字を区別しない照合で決定的に行う。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は #20 |
+| 20 | 直しの push（issue #3） | **エージェントには GitHub の資格情報を渡さず、囲いから github.com へも出さない。直しは dev-agent が周の始めの sha の上の 1 つの commit（`DevAgent[bot]`）にまとめ、囲いの外の push 用のリポジトリで書いてよいパスを検査し、手元の 1 周が通ったものだけを App の installation token（Contents: write）で直しのブランチ `dev-agent/pr-<N>/r<round>` へ push する**。PR のブランチへは push しない。head の check run は `failure` のまま `fix_branch=` / `base=` / `fix=` / `compare=` を書き、直しの sha にも `success` の check run を付ける。**取り込むかはクラウドが決める**（fast-forward か cherry-pick。人も同じ手順で取り込める）。積み上げの PR は作らない。各リポジトリの `build.yml` は `dev-agent/**` への push で CI を走らせない。直しのブランチは「取り込まれた／新しい直しに置き換えられた／PR が閉じた」ときだけ消し、期限では消さない。書けるブランチを GitHub のルールセットで絞ることはせず、dev-agent のコード（`dev-agent/` 以外の refspec を作らない・`--force` を使わない・`dev-agent/` 以外を消さない）で守る（第 4.2・4.3・4.6・4.7・4.10 節）。予算の単位は issue #15 で決める |
 
 ### 決めてほしいこと
 
@@ -963,6 +1041,8 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 頭脳（brain） | ローカルエージェントが使う LLM。`local`（同梱 Ollama。既定）か `claude`（Anthropic。昇格時） |
 | 合図 | App の webhook が中継（smee.io）を通って dev-agent に届くイベント。本文は信じず、PR 番号だけ取り出して API で読み直す |
 | check run | dev-agent が GitHub App として PR の head に作る実機の結果。名前 `DevAgent / <kind> (macOS)` |
+| 直しのブランチ | ローカルの直しを載せて dev-agent が push するブランチ `dev-agent/pr-<N>/r<round>`。PR の head の直上に 1 commit だけを置き、取り込むかはクラウドが決める |
+| push 用のリポジトリ | データ領域の `state/push/<repo>.git`。dev-agent が直しの commit を作り、検査し、push する bare リポジトリで、エージェントの囲いからは見えない |
 
 ## 付録 A. 参照した資料
 
