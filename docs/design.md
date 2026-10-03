@@ -37,6 +37,14 @@
 > 使わない（`git fetch <URL> <sha>` → detached checkout）。決まった区切りで読み直し、
 > head が動いていたらその周は `neutral` で閉じて新しい head で回し直す。push の直前は
 > 必ず読み直す（第 4.2・4.3・4.4・4.7・4.8 節、第 6 節 M0(m)、第 7 節 #23）。
+>
+> v1.6 案（2026-10-03）: 設計レビュー 1-7（issue #8）を反映。smee.io は本文をパースし
+> 直して流すので、webhook の署名（`X-Hub-Signature-256`）が合わない恐れがある。安全の
+> 本体は**API での読み直し**であって署名の検証ではないと改め、署名の検証は前提にしない。
+> 合図から取るのはリポジトリ名と PR 番号だけで、読み直しは PR ごとにまとめ、全体に上限を
+> 置く（数値は M0(a) で決める）。署名の検証を入れるかは M0(a) の計測で決め、全種類の
+> イベントで安定して通るなら入れて通らない合図を捨て、通らないなら入れない（第 3.1・
+> 4.3・4.8・4.10 節、第 6 節 M0(a)、第 7 節 #24、付録 B.3）。
 
 ## 0. 要約
 
@@ -177,7 +185,7 @@
 | **Docker Desktop**（導入済み） | Linux コンテナ | **使わない（代替は上記）** | 別途入れて保守する物が 1 つ増える。Apple Containerization が組み込めない事情が出たときの退避先として残す |
 | **Claude Code（CLI 本体）** | 頭脳の実行器。native 版は `~/.local/bin` 固定で置き場所を変えられない | **採用（npm 版をデータ領域へ入れる）** | 同梱した Node で `npm install -g --prefix <データ領域>` し、`CLAUDE_CONFIG_DIR` もデータ領域へ向ける。版は dev-agent 側で固定し（`DISABLE_AUTOUPDATER=1`）、更新は dev-agent のリリースで行う。ログイン（claude.ai の OAuth）だけはブラウザで 1 度人が行う |
 | **GitHub App（自作・個人所有）** | (1) **webhook**: PR・ラベル・コメント・push のイベントを、App に設定した 1 つの URL へ署名付き（HMAC-SHA256）で送る。(2) **Checks API**: check run（PR の Checks タブと状態欄に出る。`output.text` に長文、annotations）を作れるのは **GitHub App だけ**（公式: "To create a check run, you must use a GitHub App"） | **採用（気付き・結果・直しのブランチの push）** | 利用者が自分の GitHub App「DevAgent」を 1 度作り、5 リポジトリと私有のログ用リポジトリ（第 4.3 節）に入れる。秘密鍵と webhook secret は dev-agent のキーチェーンへ。dev-agent は JWT → installation token を自分で発行する（Security フレームワークの RSA 署名。依存は増えない）。投稿者が `devagent[bot]` になるので、人の発言と機械の出力が見分けられる。クラウドセッションの PR 購読は check suite の失敗と成功のまとめを配信するので、**結果が出た瞬間にクラウドが起きる**。webhook の届け先は次項 |
-| **webhook の中継（smee.io）** | GitHub（probot）が運用する webhook の中継。送られた webhook を、ランダムな URL のチャネルに**外向きの SSE で購読している側へ**そのまま（ヘッダごと）流す。Mac に口を開けない。無料・設定ゼロ | **採用（リアルタイムに気付く経路。真実は API で読み直す）** | App の webhook URL を smee のチャネルにし、dev-agent が SSE で待ち受ける。**中継が運ぶのは「合図」だけ**で、dev-agent は合図を受けたら GitHub API で PR・ラベル・head を読み直してから動く（中継が偽物を流しても、無駄な API 呼び出しが 1 回起きるだけ）。加えて webhook の署名を App の secret で検証する。届かない・途切れることはあるので、60 秒の ETag 付きポーリングを**取りこぼしの保険**として残す。中継を自前にしたくなったら Cloudflare Workers 等に置き換えられる（dev-agent 側は URL を変えるだけ） |
+| **webhook の中継（smee.io）** | GitHub（probot）が運用する webhook の中継。送られた webhook を、ランダムな URL のチャネルに**外向きの SSE で購読している側へ**そのまま（ヘッダごと）流す。Mac に口を開けない。無料・設定ゼロ | **採用（リアルタイムに気付く経路。真実は API で読み直す）** | App の webhook URL を smee のチャネルにし、dev-agent が SSE で待ち受ける。**中継が運ぶのは「合図」だけ**で、dev-agent は合図を受けたら GitHub API で PR・ラベル・head を読み直してから動く（中継が偽物を流しても、無駄な API 呼び出しが 1 回起きるだけ）。smee は本文をパースし直して流すので、webhook の署名は合わない恐れがある【推定】。**署名の検証は前提にせず**、入れるかは M0(a) の計測で決める（第 4.3 節）。届かない・途切れることはあるので、60 秒の ETag 付きポーリングを**取りこぼしの保険**として残す。中継を自前にしたくなったら Cloudflare Workers 等に置き換えられる（dev-agent 側は URL を変えるだけ） |
 | **Tailscale / Cloudflare Tunnel / ngrok** | クラウドから Mac へ届く口を作る | **使わない** | クラウドセッションの egress は許可リスト制で、しかも Mac に口を開ける必要が無い。連絡は GitHub（ラベル・コメント・リリース）と Remote Control の外向き接続で足りる |
 
 ### 3.2 既製で賄えないもの＝dev-agent が担うもの
@@ -362,17 +370,31 @@ PR の最新のコメントのうち `@dev-agent` で始まるものを依頼と
 
 | 経路 | 役目 | 決めごと |
 | --- | --- | --- |
-| GitHub App の webhook → smee.io のチャネル → dev-agent が SSE で購読 | **数秒で気付く** | 購読するイベントは `pull_request`（labeled / unlabeled / synchronize / reopened / closed）・`issue_comment`（created）・`release`（published。CI の成果物で回すとき）。dev-agent は署名（`X-Hub-Signature-256`）を App の secret で検証し、**本文は使わず、合図として PR 番号だけ取り出して API で読み直す**。中継の URL はキーチェーン |
+| GitHub App の webhook → smee.io のチャネル → dev-agent が SSE で購読 | **数秒で気付く** | 購読するイベントは `pull_request`（labeled / unlabeled / synchronize / reopened / closed）・`issue_comment`（created）・`release`（published。CI の成果物で回すとき）。dev-agent は**本文を信じず、合図としてリポジトリ名と PR 番号だけ取り出して API で読み直す**（下の「合図の扱い」）。署名（`X-Hub-Signature-256`）の検証は前提にしない。中継の URL はキーチェーン |
 | 60 秒ごとの `If-None-Match`（ETag）付きポーリング | **取りこぼしの保険** | 304 は上限に数えられない。5 リポジトリでも認証付きの 5,000 回/時に遠く届かない。中継が落ちていても往復は止まらず、遅くなるだけ |
 
 中継は「公開リポジトリの公開イベントを、公開の中継サービスで Mac へ流す」だけなので、
-秘密は通らない。偽の合図が来ても API で読み直すので動作は変わらず、署名の検証で
-そもそも捨てる。**「中継を信頼しない」とは、中継に判断の材料を置かないという意味**で、
-指示（ラベル・依頼コメント・head・作者）は必ず API から読む。だから中継をセルフホストに
-しても設計は変わらない（公開 URL を持つ以上、偽の POST は来るので署名の検証が本体。
-webhook 自体が順不同・重複・取りこぼしを起こすので、読み直しも残す）。セルフホストで
-得られるのは盗み見の排除と可用性の自前管理だが、公開リポジトリでは前者の価値が無く、
-後者はサーバの保守と引き換えになるため、smee.io で始める。
+秘密は通らない。偽の合図が来ても API で読み直すので動作は変わらない。**「中継を信頼
+しない」とは、中継に判断の材料を置かないという意味**で、指示（ラベル・依頼コメント・
+head・作者）は必ず API から読む。**安全の本体はこの読み直しで、署名の検証ではない**。
+だから中継をセルフホストにしても設計は変わらない（公開 URL を持つ以上、偽の POST は
+来る。webhook 自体が順不同・重複・取りこぼしを起こすので、署名が通っても読み直しは
+残す）。セルフホストで得られるのは盗み見の排除と可用性の自前管理だが、公開リポジトリ
+では前者の価値が無く、後者はサーバの保守と引き換えになるため、smee.io で始める。
+
+**合図の扱い（issue #8）。** smee.io は受けた本文を一度 JSON としてパースし、文字列に
+直してから SSE で流す。GitHub の HMAC は元のバイト列にかかっているので、文字の
+エスケープ（`<` `>` `&` を `\u003c` 等に逃がすか）・空白・キーの並びが変わると合わない
+【推定】。合図からは判断の材料を取らないので、検証が落ちても実害は無駄な読み直しだけで、
+ETag 付きの読み直しが 304 で返ればレート上限にも数えられない。そこで次のように扱う。
+
+| 決めごと | 中身 |
+| --- | --- |
+| 取り出すもの | `X-GitHub-Event` とリポジトリ名（`repository.full_name`）と PR 番号だけ。設定に無いリポジトリ・購読していないイベント・PR 番号が取れない合図は捨てる。ラベル名・作者・head・本文は合図から読まない |
+| 読み直しのまとめ | 合図は「この PR を読み直せ」に落とし、同じ PR への合図は一定の間隔に 1 回へまとめる。全体にも単位時間あたりの読み直しの上限を置き、超えた分は捨てて 60 秒のポーリングに任せる（偽の POST を大量に送られても、無駄な処理に上限が付くだけになる）。**間隔と上限の数値は M0(a) の実測で決め、付録 B.3 に書く**。立て続けの push で周をまとめる規則（issue #19）とは別の段で、こちらは合図を読み直しに落とすところまで |
+| 署名の検証 | **入れるかを M0(a) の計測で決める**。全種類のイベント（題や本文に `<`・`&`・絵文字・日本語を含むものも）で安定して通るなら入れ、通らない合図は捨てる（取りこぼしはポーリングが拾う）。通らない種類が残るなら入れず、すべての合図を上のまとめの規則だけで扱う。どちらでも動作の正しさは読み直しが支え、検証の有無では変わらない |
+| 検証するときの照合 | smee の SSE の `data` の文字列から `body` の値の部分を**そのまま切り出して**照合する（Swift でパースして文字列に戻すと必ず崩れる）。App の webhook の content type は `application/json` に固定する（form 形式は中継で崩れる） |
+| 中継を替えたとき | 生のバイト列を保ったまま運ぶ自前の中継（Cloudflare Workers 等）に替えれば署名は通るはずで、そのときに検証を入れ直す。ほかの規則は変えない |
 
 #### ローカル → クラウド: check run（GitHub App として。自前で投稿する）
 
@@ -1010,7 +1032,8 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
     プロファイル生成。判断を置かない。
   - `Sources/DevAgentGitHub/` … GitHub App の JWT（RS256。Security フレームワーク）と
     installation token、check run の作成と更新、PR・ラベル・コメント・Releases の読み取り
-    （ETag 付き）、webhook の署名検証、直しのブランチの push と削除、ログ用リポジトリへの
+    （ETag 付き）、webhook の署名の照合（M0(a) で入れると決めたとき。渡されたバイト列の
+    HMAC を計算するだけ）、直しのブランチの push と削除、ログ用リポジトリへの
     書き込みとブランチの削除（書く前に `private: true` を確かめる）。判断を置かない。
     check run の本文の組み立て、push の refspec の組み立て（`dev-agent/` 以外を作らない）、
     直しのブランチとログのブランチを消すかの判定（第 4.3 節）は Core（純ロジック）。
@@ -1018,7 +1041,9 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
     ログ用リポジトリへ書く関数は `LogText` だけを受け取り、`String` は受け取らない**ので、
     伏せ字を飛ばす経路も本文を公開リポジトリへ書く経路もコンパイルが通らない。
   - `Sources/DevAgentWatch/` … 中継（smee.io）への SSE 購読と、保険のポーリングの時計。
-    受けた合図を「この PR を読み直せ」に落とすだけで、判断を置かない。
+    受けた合図を「この PR を読み直せ」に落とすだけで、判断を置かない（署名を照合するときは
+    `data` から `body` の生の部分を切り出して渡す）。合図を捨てるか・いつ読み直すか（PR
+    ごとのまとめと全体の上限。第 4.3 節）は Core（純ロジック）。
   - `Sources/dev-agent/` … CLI。`setup`（道具とモデルを揃え、App の鍵と中継を設定する）／
     `doctor`（足りない物の名指し）／`watch`（常駐。合図を受けて `run` を回す）／
     `run --repo --pr [--sha]`（1 周だけ。`--sha` を渡すと、API の head と違えば拒む）／`build --repo --pr`／`install --repo --build`／
@@ -1075,7 +1100,7 @@ dev-agent へ移る PR で「DevAgent の check run の読み方」に書き換�
 | Xcode（Metal ツールチェーン込み） | 10 GB 超で再配布できない | `doctor` が `xcode-select` と Metal ツールチェーンの有無を見る。足りなければ `xcodebuild -downloadComponent MetalToolchain` を提案する |
 | Vectorworks 2026 本体 | 確かめる対象そのもの | 起動・終了だけ行う |
 | claude.ai のログイン | OAuth はブラウザで人が行う | 初回に `claude auth login` を開く。資格情報はキーチェーン |
-| GitHub App「DevAgent」 | 人が 1 度作り、5 リポジトリに入れる（Checks と Contents の write、webhook が要る） | 初回に App ID・秘密鍵（.pem）・webhook secret を受け取りキーチェーンへ。webhook URL は `setup` が作った smee のチャネル。M5 で GitHub の manifest flow（1 クリックで App を作る）に置き換える |
+| GitHub App「DevAgent」 | 人が 1 度作り、5 リポジトリに入れる（Checks と Contents の write、webhook が要る） | 初回に App ID・秘密鍵（.pem）・webhook secret を受け取りキーチェーンへ（署名の検証を入れないと決めても secret は App に設定し、伏せ字の対象に残す）。webhook URL は `setup` が作った smee のチャネルで、content type は `application/json`。M5 で GitHub の manifest flow（1 クリックで App を作る）に置き換える |
 | iPhone の署名証明書（任意） | Apple Developer のもの | `run-ios.sh` がキーチェーンから引く |
 
 #### アプリが抱えるもの（データ領域）
@@ -1245,7 +1270,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 
 | 段 | 何をするか | 終わりの印 |
 | --- | --- | --- |
-| **M0 検証スパイク（作る前に確かめる）** | (a) GitHub App の webhook → smee.io → SSE で、ラベル付けから dev-agent が気付くまでの秒数と、1 日の取りこぼし率（ポーリングが拾った件数）を測る。launchd agent から `open -a "Vectorworks 2026"` と `xcodebuild` が**ログイン中のユーザーの画面で**動くか（GUI と Metal が使えるか）も確かめる。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) 自作 GitHub App の installation token で check run を作り、クラウドセッションの PR 購読がその失敗で起きるか・`get_check_run` で読めるか。あわせて、私有のログ用リポジトリへ App で書いた `report.md`（60 KB）・1 MB のログ・`screen-1.png` を、ログ用リポジトリを対象に足したクラウドセッションとルーティンが `get_file_contents` で読めるか（文字と画像の両方。読める大きさの上限も測り、第 4.3 節の「大きさ」に反映する）。(k) **head のハーネスを読ませない起こし方**: worktree に「起動で印のファイルを作る hook」「`bypassPermissions`」「`.mcp.json` のサーバ」「skill」を仕込み、第 4.6 節の組み立て（`--setting-sources`・`--settings`・`--strict-mcp-config`・`--append-system-prompt`）で `claude -p` を起こして、どれも効かないこと、既定ブランチから渡した hooks と deny は効くことを確かめる。(l) **エージェントが push できないことと、dev-agent の push の道**: 第 4.7 節の囲い（ネットワーク許可・Seatbelt・環境）の下の `claude -p` の Bash から、`git push`（osxkeychain・SSH・`~/.config/gh` のいずれを使っても）・`gh`・`security find-internet-password` が**すべて失敗する**こと。App の installation token（Contents: write、Workflows なし）で `dev-agent/pr-<N>/r<round>` への push と削除ができ、既定ブランチへは拒まれ、`.github/workflows/` を含む push も拒まれること。直しの sha に付けた check run が、fast-forward で取り込んだ後の PR の head でそのまま見え、dev-agent がビルドを飛ばせること。(m) **sha で取り寄せる道**: GitHub に対して `git fetch --no-tags https://github.com/<o>/<r>.git <head_sha>` で PR の head（fork でないもの）が取れるか、force-push で到達できなくなった sha がどう振る舞うか（取れる・取れない・いつまで）、予備の `refs/pull/<N>/head` を取って `rev-parse` で一致を確かめる道が動くか。あわせて、head が進んで `neutral` で閉じた古い sha の check run が、クラウドセッションの PR 購読を起こさないか | 各項目の結果を本書の付録に書く。(k) で効いてしまう種類があれば、第 4.6 節の「PR がそれを変えていたらエージェントを起こさない」をその種類に適用する。(l) でエージェントから push できる道が 1 つでも残れば、塞げるまで M3（直し）に進まない。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く。(m) で sha の直接の取り寄せが通らなければ、`refs/pull/<N>/head` と一致の確認を主の道にする（第 4.2 節）。`neutral` がクラウドを起こすなら、打ち切りの check run の書き方を見直す |
+| **M0 検証スパイク（作る前に確かめる）** | (a) GitHub App の webhook → smee.io → SSE で、ラベル付けから dev-agent が気付くまでの秒数と、1 日の取りこぼし率（ポーリングが拾った件数）を測る。あわせて、smee を通った webhook の署名（`X-Hub-Signature-256`）が、SSE の `data` から切り出した `body` で通る割合をイベントの種類ごとに測る（題や本文に `<`・`&`・絵文字・日本語を含む PR でも）。チャネルへ偽の POST を流し、読み直しのまとめと上限が効くこと・周が始まらないことを確かめ、PR ごとのまとめの間隔と全体の上限の数値を決める。launchd agent から `open -a "Vectorworks 2026"` と `xcodebuild` が**ログイン中のユーザーの画面で**動くか（GUI と Metal が使えるか）も確かめる。(b) **ローカル LLM の代用範囲の計測**: 5 リポジトリの過去の PR から「CI の赤 → 直した commit」の組を 30〜50 件集め、`dev-agent bench-brain` で `claude -p` ＋ Ollama（16 GB に入る 7〜9B 級を 3 つ）に同じ失敗を直させ、第 4.6 節の仕事ごとに成功率・所要・メモリを測る（判定は「手元の 1 周が通るか」）。同じ組を `--model haiku` でも測り、昇格先の目安にする。(c) スプール経由で Vectorworks の本体の関数を外から呼べるか（既存の `vw_call` で確認）。(d) `Vectorworks -t` の実在（SDK リファレンスの issue）。(e) Desktop のローカル・スケジュールタスクで「PR を見に行って結果を返す」を手作業の代わりに 1 周回してみる。(f) 各リポジトリの手元ビルドの所要時間（初回・差分）を実測し、G6 の目標を現実の数字にする。(g) Containerization を SwiftPM のアプリに組み込み、worktree をマウントした VM で `npm run build` が通るか（署名と entitlement の条件も）。(h) npm 版の Claude Code を prefix 指定でデータ領域へ入れ、`CLAUDE_CONFIG_DIR` の下で `claude -p` と Remote Control（擬似端末で起動）が動くか。(i) 同梱した Ollama を `OLLAMA_MODELS` / `OLLAMA_HOST` 指定で起動し、Claude Code から使えるか。(j) 自作 GitHub App の installation token で check run を作り、クラウドセッションの PR 購読がその失敗で起きるか・`get_check_run` で読めるか。あわせて、私有のログ用リポジトリへ App で書いた `report.md`（60 KB）・1 MB のログ・`screen-1.png` を、ログ用リポジトリを対象に足したクラウドセッションとルーティンが `get_file_contents` で読めるか（文字と画像の両方。読める大きさの上限も測り、第 4.3 節の「大きさ」に反映する）。(k) **head のハーネスを読ませない起こし方**: worktree に「起動で印のファイルを作る hook」「`bypassPermissions`」「`.mcp.json` のサーバ」「skill」を仕込み、第 4.6 節の組み立て（`--setting-sources`・`--settings`・`--strict-mcp-config`・`--append-system-prompt`）で `claude -p` を起こして、どれも効かないこと、既定ブランチから渡した hooks と deny は効くことを確かめる。(l) **エージェントが push できないことと、dev-agent の push の道**: 第 4.7 節の囲い（ネットワーク許可・Seatbelt・環境）の下の `claude -p` の Bash から、`git push`（osxkeychain・SSH・`~/.config/gh` のいずれを使っても）・`gh`・`security find-internet-password` が**すべて失敗する**こと。App の installation token（Contents: write、Workflows なし）で `dev-agent/pr-<N>/r<round>` への push と削除ができ、既定ブランチへは拒まれ、`.github/workflows/` を含む push も拒まれること。直しの sha に付けた check run が、fast-forward で取り込んだ後の PR の head でそのまま見え、dev-agent がビルドを飛ばせること。(m) **sha で取り寄せる道**: GitHub に対して `git fetch --no-tags https://github.com/<o>/<r>.git <head_sha>` で PR の head（fork でないもの）が取れるか、force-push で到達できなくなった sha がどう振る舞うか（取れる・取れない・いつまで）、予備の `refs/pull/<N>/head` を取って `rev-parse` で一致を確かめる道が動くか。あわせて、head が進んで `neutral` で閉じた古い sha の check run が、クラウドセッションの PR 購読を起こさないか | 各項目の結果を本書の付録に書く。(a) の署名が全種類で安定して通れば検証を入れ、通らない種類が残れば入れない（第 4.3 節。付録 B.3）。(k) で効いてしまう種類があれば、第 4.6 節の「PR がそれを変えていたらエージェントを起こさない」をその種類に適用する。(l) でエージェントから push できる道が 1 つでも残れば、塞げるまで M3（直し）に進まない。(b) の成績で、第 4.6 節の表の「見込み」を実測に置き換え、`agent.allowed` ごとの既定（local で始めるか、最初から claude か）を決める。(g) が駄目なら第 2 層を外し、(h) が駄目なら native 版を `~/.local` に置く妥協を第 4.10 節に書く。(m) で sha の直接の取り寄せが通らなければ、`refs/pull/<N>/head` と一致の確認を主の道にする（第 4.2 節）。`neutral` がクラウドを起こすなら、打ち切りの check run の書き方を見直す |
 | **M1 dev-agent の骨格＋道具の保管庫＋Builder＋mac-app アダプタ** | Core（マニフェスト・周の状態・コメント・**伏せ字とログ用リポジトリの置き場所**。check run を初めて書く段なので、ここで入れて `swift test` で押さえる）、Toolchains（`toolchains.yaml`・`setup`・`doctor`・環境変数。囲いは第 1 層だけ）、Builder（worktree と差分ビルド）、CLI の `run --repo --pr`。GitHub（App の token・check run・ログ用リポジトリ `min-nano/dev-agent-logs` への書き込み・webhook と中継・保険のポーリング）。**dev-agent 自身の自動アップデート**（第 4.11 節。姉妹アプリから移植）。photogrammetry で「push → 合図 → 手元ビルド → 入れ替え → `photogrammetry-cli` → check run」を 1 周 | photogrammetry の PR に `DevAgent / mac-app (macOS)` の check run が人手ゼロで付く。push から結果まで 5 分以内 |
 | **M2 Vectorworks アダプタ＋スプールの口** | プラグイン側に `vw_run_test` を足す（本体）。dev-agent 側に vectorworks-plugin のビルド（`cmake` ＋ `VW_SDK_DIR`）・配置・再起動。既存の往復と**並走**させ、同じ結果が返ることを確かめる | 同じ head に対して、プラグイン内の往復（CI のビルド。コメント）と dev-agent の往復（手元のビルド。check run）が同じ本文を出す。push から結果まで 10 分以内 |
 | **M3 AgentBridge＋同梱 Ollama** | Claude Code（npm 版）をデータ領域へ。`claude -p` の起動・worktree・材料の絞り込み・`--json-schema` の受け取り・予算。同梱 Ollama の起動・停止とモデルの取り寄せ。M0(b) の成績で「高い」と出た仕事から `local` を既定にし、昇格の規則を入れる | 実機の失敗から dev-agent が直しのブランチへ push した修正を、クラウドが取り込んで CI が緑になる例が 1 つできる。そのうち Anthropic を呼ばずに済んだ割合を付録 B に書く |
@@ -1286,6 +1311,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 21 | 診断ログの置き場と伏せ字（issue #4） | **本文・診断ログ・画面は公開リポジトリに載せず、私有のログ用リポジトリ `min-nano/dev-agent-logs` に置く**（PR ごとのブランチ `logs/<repo>/pr-<N>`、周ごとのフォルダ `r<round>/`。閲覧は組織のメンバーとクラウドのセッション。書くのは dev-agent の App だけで、書く前に毎回 `private: true` を確かめる。PR が閉じたらブランチを消す）。GCS などに置く案は、クラウドのエージェントに別の資格情報とネットワークの許可が要るので採らない。公開リポジトリの check run には、Core が決まった部品から組み立てた結論・数・`logs=` の置き場所と、worktree の中のファイルへの annotation だけを書き、`output.text` は書かない。**GitHub へ出ていく文字列は Core の `Redactor` を必ず通し、公開向けの型 `PublicText` とログ用の型 `LogText` は Core の外から作れず、それぞれの書き込み関数はその型しか受け取らない**（伏せ字を飛ばす経路も、本文を公開リポジトリへ書く経路も型で作れなくする）。秘密（dev-agent が持つ値の完全一致・秘密の形・秘密らしい名前の変数の値）は行き先を問わず伏せ、ホーム・worktree の外のパス・ユーザー名・氏名・コンピュータ名・機器の識別子・git の email は公開向けだけで伏せる（ログ用では直しのために残す）。伏せた結果に秘密が残る、値を集められない、ログ用リポジトリが私有でないときは上げない。伏せる前の記録は手元（`~/Library/Logs/dev-agent/rounds/`）にだけ残す。直しの commit の足した行にも公開向けの検出をかけ、当たれば push しない。漏れたときは `dev-agent scrub` でログのブランチを消し check run の `output` を上書きし、秘密を作り直す（第 4.3・4.6・4.7・4.8・4.10 節） |
 | 22 | コマンドの書式と信頼の境界（issue #6） | **`dev-agent.yaml` が走らせるものは本人の PR のコードと同じ信頼で扱い、守りは書式ではなく「本人の PR だけ」「歯止めは既定ブランチから」「囲い」の 3 つだと明記する。** コマンドは「手順のリスト × argv」の 2 段で書き、シェルを通さず `posix_spawn` で起こす（文字列はスキーマのエラー）。`argv[0]` は `PATH` の素の名前か worktree 内の `./` パスだけ。置き換えは `{name}` の 1 種類で、環境変数は `build.requires` に書いた名前だけ `{env.NAME}` で参照する。置き換えは要素 1 つの中で 1 回だけ、知らない名前と `$NAME` / `${NAME}` はスキーマのエラー。`output` と `collect` のパスは `{worktree}`・`{build_dir}`・`{tmp}` の中に限る（第 4.4・4.7 節） |
 | 23 | 確かめた head とビルドする head（issue #7） | **周の始めに PR を 1 回だけ API で読み、その応答を周の固定値（`RoundPin`。head の sha・作者・ラベル・既定ブランチの sha・使った依頼コメントの id）として凍らせる。ビルド・check run・直しの起点・`compare`・ビルドを飛ばす判定は、すべて固定値の sha を使い、ブランチ名は使わない**。取り寄せは明示した URL で `git fetch <URL> <sha>` → detached checkout（予備に `refs/pull/<N>/head` を取って一致を確かめる道。主と予備は M0(m) で確定）。`dev-agent.yaml` は固定した sha から `git show` で読む。周の中の決まった区切り（ビルド・入れ替え・結果を書く・エージェントを起こす・エージェントの後・**push の直前は必ず**）で読み直し、head が動いていたら固定した sha の check run を `neutral`（`superseded_by=`）で閉じ、直しは push せずに捨て、新しい head で回し直す。ラベルが外れた／`stop` が付いたら `stop` と同じ扱い。判定は Core の純ロジック（第 4.2・4.3・4.4・4.7・4.8 節）。立て続けの push をまとめる規則とリポジトリ間の順番は issue #19 |
+| 24 | 中継を通った webhook の署名（issue #8） | **安全の本体は API での読み直しで、署名の検証は前提にしない。** 合図から取るのは `X-GitHub-Event`・リポジトリ名・PR 番号だけで、設定に無いリポジトリや購読していないイベントは捨てる。読み直しは同じ PR ごとにまとめ、全体に上限を置き、超えた分はポーリングに任せる（数値は M0(a) の実測で決める）。**署名の検証を入れるかは M0(a) で決め**、smee を通っても全種類のイベントで安定して通るなら入れて通らない合図を捨て、通らない種類が残るなら入れない。照合は SSE の `data` から `body` を切り出したままのバイト列で行い、App の webhook は `application/json` にする。自前の中継に替えたら検証を入れ直す（第 3.1・4.3・4.8・4.10 節、第 6 節 M0(a)） |
 
 ### 決めてほしいこと
 
@@ -1303,7 +1329,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | Builder | PR ごとの worktree を保ち、マニフェストの `build` 節で差分ビルドする dev-agent の部品 |
 | マニフェスト | リポジトリ直下の `dev-agent.yaml`（期待する動作。PR の head から読む）と `dev-agent.policy.yaml`（直してよい範囲・置き場所。既定ブランチから読む）の 2 つ |
 | 頭脳（brain） | ローカルエージェントが使う LLM。`local`（同梱 Ollama。既定）か `claude`（Anthropic。昇格時） |
-| 合図 | App の webhook が中継（smee.io）を通って dev-agent に届くイベント。本文は信じず、PR 番号だけ取り出して API で読み直す |
+| 合図 | App の webhook が中継（smee.io）を通って dev-agent に届くイベント。本文は信じず、リポジトリ名と PR 番号だけ取り出して API で読み直す。署名の検証は前提にしない（第 4.3 節） |
 | check run | dev-agent が GitHub App として PR の head に作る実機の結果。名前 `DevAgent / <kind> (macOS)` |
 | 周の固定値（RoundPin） | 周の始めに 1 回だけ API で読んだ PR の head の sha・作者・ラベルと既定ブランチの sha。その周のビルド・check run・直しはすべてこれを使い、ブランチ名を使わない（第 4.2 節） |
 | 直しのブランチ | ローカルの直しを載せて dev-agent が push するブランチ `dev-agent/pr-<N>/r<round>`。PR の head の直上に 1 commit だけを置き、取り込むかはクラウドが決める |
@@ -1349,3 +1375,13 @@ M0 の各項目の結果をここに書く。確認水準の印は SDK リファ
 | リポジトリ | 初回 | 差分（本体 1 ファイル） | 備考 |
 | --- | --- | --- | --- |
 | （未計測） | | | |
+
+### B.3 中継を通った webhook の署名と合図のまとめ（M0(a)）
+
+| イベント（action） | 件数 | 署名が通った | 通らなかった例（本文の特徴） | 備考 |
+| --- | --- | --- | --- | --- |
+| （未計測） | | | | |
+
+- 署名の検証を入れるか: （未決。全種類で安定して通れば入れる。第 4.3 節）
+- PR ごとのまとめの間隔: （未決）
+- 全体の読み直しの上限: （未決）
