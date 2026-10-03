@@ -24,6 +24,12 @@
 > 公開リポジトリへ本文を書く経路を作れなくする。私有側でも秘密は伏せる。直しの commit
 > にも同じ検出をかけ、当たれば push しない（第 4.2・4.3・4.6・4.7・4.8・4.10 節、
 > 第 7 節 #21）。
+>
+> v1.4 案（2026-10-03）: 設計レビュー 1-5（issue #6）を反映。`dev-agent.yaml` が走らせる
+> ものは「本人の PR のコード」と同じ信頼で扱い、守りは書式ではなく対象の限定・歯止めの
+> 出どころ・囲いだと明記する。コマンドはシェルを通さない **argv の配列**にし、置き換えは
+> `{name}`（環境変数は `{env.NAME}`）の 1 種類に揃える。`output` と `collect` のパスは
+> worktree・ビルド・周の一時領域の中に限る（第 4.4・4.7 節、第 7 節 #22）。
 
 ## 0. 要約
 
@@ -530,10 +536,11 @@ build:                                      # 手元の差分ビルド（CI の 
   requires:                                 # 無ければ dev-agent doctor が指摘し、fallback へ
     - env: VW_SDK_DIR                       # SDKLib を含むフォルダ
     - tool: cmake
-  configure: >-                             # 初回と CMakeLists が変わったときだけ
-    cmake -S . -B {build_dir} -DVW_SDK_DIR=$VW_SDK_DIR
-    -DVW_BUILD_CHANNEL=dev -DVW_BUILD_BRANCH={branch} -DVW_BUILD_VERSION={sha7}
-  command: cmake --build {build_dir} --config Release --parallel
+  configure:                                # 初回と CMakeLists が変わったときだけ。手順のリスト × argv
+    - [cmake, -S, ., -B, "{build_dir}", "-DVW_SDK_DIR={env.VW_SDK_DIR}",
+       -DVW_BUILD_CHANNEL=dev, "-DVW_BUILD_BRANCH={branch}", "-DVW_BUILD_VERSION={sha7}"]
+  command:                                  # シェルを通さず直接起動する
+    - [cmake, --build, "{build_dir}", --config, Release, --parallel]
   output: "{build_dir}/min-nano_structureDev.vwlibrary"   # install へ渡す成果物
   cache: per-pr                             # build_dir を PR ごとに保つ（差分ビルドのため）
   timeout: 30m
@@ -622,6 +629,41 @@ agent:                                      # 直してよい範囲
   通るが CI で落ちる」が増えるので作らない。刻印（コミット・ブランチ・チャンネル）も
   CI と同じ変数で渡し、`channel` は `dev` にする（アプリ側のアップデータが残っている間は
   それが「別のビルド」と誤認しないよう、移行期間は自動確認を切る。第 4.9 節）。
+- **コマンドは argv の配列で書き、シェルを通さない。** `build.configure` / `build.command`
+  （と `round.run` で CLI を直接呼ぶ手順。第 5.3 節）は、常に「手順のリスト × argv」の
+  2 段で書く（手順が 1 つでも 2 段。文字列で書いたらスキーマのエラー）。dev-agent は各手順を
+  `posix_spawn` で直接起こし、パイプ・リダイレクト・`&&`・glob・`~` は解釈しない。それが
+  要るならリポジトリ内のスクリプトに書き、CI の `build.yml` も同じスクリプトを呼ぶ
+  （入口が 1 つに揃う）。狙いは注入と解釈の揺れ（クォート・空白・展開の順序）を消すことで、
+  守りは第 4.7 節 2 のとおり別にある。
+  - `argv[0]` は 2 通りだけ。素の名前は dev-agent が組み立てた `PATH`（toolchains が先頭。
+    第 4.10 節）から探す。`./` で始まるものは worktree の中のパスで、`realpath` が worktree
+    の外へ出るもの（`..`・リンク越し）は拒む。絶対パスはスキーマで拒む。
+  - 環境変数は人のシェルから受け継がない。第 4.10 節で dev-agent が組み立てたものだけ。
+- **置き換えは `{name}` の 1 種類。** 使える名前は次のとおり。
+
+  | 名前 | 中身 |
+  | --- | --- |
+  | `{build_dir}` `{fixtures}` `{tmp}` `{worktree}` | dev-agent が決める置き場（`{tmp}` は周ごとの一時領域で、確かめる対象のアプリにも `TMPDIR` として渡す） |
+  | `{branch}` `{sha}` `{sha7}` `{slug}` | 周の始めに固定した PR の head |
+  | `{env.NAME}` | dev-agent が組み立てた環境の値。**`build.requires` に `env:` で書いた名前だけ**参照できる |
+
+  - 置き換えは **argv の要素 1 つの中だけ**で行い、要素を分けもつなぎもしない（空白を含む
+    値も 1 つの引数のまま）。
+  - **1 回だけ**置き換え、置き換えた値の中の `{…}` は再び展開しない（`{branch}` に
+    `{env.X}` を含めても漏れない）。
+  - 知らない名前・`requires` に無い `{env.X}` は空文字にせず**スキーマのエラー**。
+    文字としての波括弧は `{{` / `}}`。
+  - `$NAME` / `${NAME}` は展開するシェルが無いので書き間違いとみなし、**スキーマのエラー**
+    にする（移行時の書き残しを黙って通さない）。
+  - 置き換えを使えるのは `build` の argv・`build.output`・`round` の `args` と `path`・
+    `artifact.release.dev_tag` だけ。
+- **`output` と `collect` のパスは囲いの中に限る。** 置き換えた後に `realpath` し、
+  `{worktree}`・`{build_dir}`・`{tmp}` の中にあるものだけを受け取る（リンクで外へ出る
+  ものも拒む）。回収と入れ替えは囲いの外の dev-agent が行うので、head の
+  `collect.path: "~/.ssh/id_ed25519"` で人の鍵をログ用リポジトリへ上げさせない（伏せ字の
+  検出に頼らず、読む前に止める）ため。外れたら `failure` にし、外れたことを結論に書く
+  （パスは第 4.3 節の伏せ字の規則どおり公開向けでは伏せる）。
 - **スキーマの検証は dev-agent が無 SDK・無ネットワークで行い**、エラーは check run に
   載せる（マニフェストの typo で黙って何もしない、を避ける）。
 
@@ -746,8 +788,19 @@ Remote Control は「Mac で動く Claude Code のセッションを、claude.ai
    webhook の本文を信じず、dev-agent が GitHub API で読み直した PR の `user` と
    `head.repo` で行う。ラベルは write 権限が無いと付けられないので二重の門になる。
    他人の PR は、ラベルが付いていても（付けられないはずだが）動かさない。
-2. **マニフェストに書けるコマンドは、アダプタの操作とリポジトリ内のスクリプトだけ。**
-   任意のシェルは書けない（CI の `build.yml` と同じ信頼水準に揃える）。
+2. **`dev-agent.yaml` が走らせるものは「本人の PR のコード」と同じ信頼で扱う。**
+   `dev-agent.yaml` も、そこから呼ぶリポジトリ内のスクリプトも、ビルドの中で走るコード
+   （`CMakeLists.txt` の `execute_process` など）も PR の head にあり、PR が変えられる。
+   ローカルエージェントの直しも、書いてよいパスの中なら手元の 1 周のビルドで走る。
+   **マニフェストの書式（argv。第 4.4 節）は守りではない。** 信頼の境界は「本人の PR で
+   fork でない」こと（1）で、CI の `build.yml` と同じ水準。守りは次の 3 つで持つ。
+   - 対象を本人の PR に限る（1）。
+   - 歯止めを PR から変えられない（3）。
+   - ビルドと実行を囲いに入れる（8・9、第 4.10 節）。
+   クラウドのエージェントは公開リポジトリの issue などから誘導されうるので、「本人の PR
+   だから中身も安全」とは置かない。**悪意ある中身が来ても、囲いの外へ書けず、資格情報にも
+   github.com にも届かない**ことを最後の守りにする。囲いの外で dev-agent が head の値を
+   使う所（入れ替える成果物と回収するファイルのパス）は、囲いの中に限る（第 4.4 節）。
 3. **歯止めは PR から変えられない。** `dev-agent.policy.yaml`（`agent` / `install` 等）と
    エージェントのハーネス（`.claude/`・`CLAUDE.md`）は、PR の head ではなく既定ブランチ
    から読む（第 4.4・4.6 節）。PR の head は「確かめる対象」であって、「確かめ方の
@@ -1154,6 +1207,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 19 | 歯止めの出どころ（issue #2） | **マニフェストを 2 つに分ける。確かめ方（`build` / `round` / `expect` / `artifact` / `context`）は `dev-agent.yaml` に置いて PR の head から読み、歯止め（`agent` / `install` / `kind` 等）は `dev-agent.policy.yaml` に置いてハーネス（`.claude/`・`CLAUDE.md`）とともに既定ブランチ（`default_branch`。PR の base ではない）から読む**。取り違えた節はスキーマのエラーにする。エージェントが書いてよいパスは**許可制で既定は拒否**（`agent.paths.allow` から `paths.deny` を除いたもの）。両マニフェスト・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に禁じ、マニフェストでは開けない。判定は `git diff --no-renames` と大文字小文字を区別しない照合で決定的に行う。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は #20 |
 | 20 | 直しの push（issue #3） | **エージェントには GitHub の資格情報を渡さず、囲いから github.com へも出さない。直しは dev-agent が周の始めの sha の上の 1 つの commit（`DevAgent[bot]`）にまとめ、囲いの外の push 用のリポジトリで書いてよいパスを検査し、手元の 1 周が通ったものだけを App の installation token（Contents: write）で直しのブランチ `dev-agent/pr-<N>/r<round>` へ push する**。PR のブランチへは push しない。head の check run は `failure` のまま `fix_branch=` / `base=` / `fix=` / `compare=` を書き、直しの sha にも `success` の check run を付ける。**取り込むかはクラウドが決める**（fast-forward か cherry-pick。人も同じ手順で取り込める）。積み上げの PR は作らない。各リポジトリの `build.yml` は `dev-agent/**` への push で CI を走らせない。直しのブランチは「取り込まれた／新しい直しに置き換えられた／PR が閉じた」ときだけ消し、期限では消さない。書けるブランチを GitHub のルールセットで絞ることはせず、dev-agent のコード（`dev-agent/` 以外の refspec を作らない・`--force` を使わない・`dev-agent/` 以外を消さない）で守る（第 4.2・4.3・4.6・4.7・4.10 節）。予算の単位は issue #15 で決める |
 | 21 | 診断ログの置き場と伏せ字（issue #4） | **本文・診断ログ・画面は公開リポジトリに載せず、私有のログ用リポジトリ `min-nano/dev-agent-logs` に置く**（PR ごとのブランチ `logs/<repo>/pr-<N>`、周ごとのフォルダ `r<round>/`。閲覧は組織のメンバーとクラウドのセッション。書くのは dev-agent の App だけで、書く前に毎回 `private: true` を確かめる。PR が閉じたらブランチを消す）。GCS などに置く案は、クラウドのエージェントに別の資格情報とネットワークの許可が要るので採らない。公開リポジトリの check run には、Core が決まった部品から組み立てた結論・数・`logs=` の置き場所と、worktree の中のファイルへの annotation だけを書き、`output.text` は書かない。**GitHub へ出ていく文字列は Core の `Redactor` を必ず通し、公開向けの型 `PublicText` とログ用の型 `LogText` は Core の外から作れず、それぞれの書き込み関数はその型しか受け取らない**（伏せ字を飛ばす経路も、本文を公開リポジトリへ書く経路も型で作れなくする）。秘密（dev-agent が持つ値の完全一致・秘密の形・秘密らしい名前の変数の値）は行き先を問わず伏せ、ホーム・worktree の外のパス・ユーザー名・氏名・コンピュータ名・機器の識別子・git の email は公開向けだけで伏せる（ログ用では直しのために残す）。伏せた結果に秘密が残る、値を集められない、ログ用リポジトリが私有でないときは上げない。伏せる前の記録は手元（`~/Library/Logs/dev-agent/rounds/`）にだけ残す。直しの commit の足した行にも公開向けの検出をかけ、当たれば push しない。漏れたときは `dev-agent scrub` でログのブランチを消し check run の `output` を上書きし、秘密を作り直す（第 4.3・4.6・4.7・4.8・4.10 節） |
+| 22 | コマンドの書式と信頼の境界（issue #6） | **`dev-agent.yaml` が走らせるものは本人の PR のコードと同じ信頼で扱い、守りは書式ではなく「本人の PR だけ」「歯止めは既定ブランチから」「囲い」の 3 つだと明記する。** コマンドは「手順のリスト × argv」の 2 段で書き、シェルを通さず `posix_spawn` で起こす（文字列はスキーマのエラー）。`argv[0]` は `PATH` の素の名前か worktree 内の `./` パスだけ。置き換えは `{name}` の 1 種類で、環境変数は `build.requires` に書いた名前だけ `{env.NAME}` で参照する。置き換えは要素 1 つの中で 1 回だけ、知らない名前と `$NAME` / `${NAME}` はスキーマのエラー。`output` と `collect` のパスは `{worktree}`・`{build_dir}`・`{tmp}` の中に限る（第 4.4・4.7 節） |
 
 ### 決めてほしいこと
 
