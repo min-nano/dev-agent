@@ -20,7 +20,7 @@
 > （check run の `title`・`summary`・`text`・annotations、issue への 1 行）は、投稿の直前に
 > Core の伏せ字（`Redactor`）を必ず通し、伏せ字を通らない投稿経路を型で作れなくする。
 > ホーム・ユーザー名・氏名・コンピュータ名・秘密の形・dev-agent が持つ秘密の完全一致を
-> 伏せ、確かめられないときは本文を載せない。直しの commit にも同じ検出をかけ、当たれば
+> 伏せ、公開してよい場所の外のファイル・フォルダ名は部分ごとに仮名にし、確かめられないときは本文を載せない。直しの commit にも同じ検出をかけ、当たれば
 > push しない（第 4.2・4.3・4.6・4.7・4.8・4.10 節、第 7 節 #21）。
 
 ## 0. 要約
@@ -363,9 +363,9 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
 - **順番は「揃える → 伏せ字 → 組み立て → 削る」。** まず ANSI のエスケープと `\r` を
   取り除き、Unicode を NFC に揃える（色付きのログでトークンが割られて当たらない、を防ぐ）。
   伏せ字は周ごとの生の本文・ログに 1 回ずつかけ、組み立てた後に上限まで削る（削ってから
-  伏せると、秘密が切れ目で半分になり、パターンに当たらなくなる）。前の周を `text` に残すときも、ローカルに保存した**生の
-  記録から毎回組み立て直して伏せる**（一度伏せたものを継ぎ足していくと、伏せ字の規則を
-  増やしても古い周に効かない）。
+  伏せると、秘密が切れ目で半分になり、パターンに当たらなくなる）。前の周を `text` に
+  残すときも、ローカルに保存した**生の記録から毎回組み立て直して伏せる**（一度伏せたものを
+  継ぎ足していくと、伏せ字の規則を増やしても古い周に効かない）。
 - **伏せるもの**（置き換えた跡は `[redacted:<種類>]` と残し、何が消えたかは読めるように
   する。値そのものの長さや先頭は残さない）:
 
@@ -375,7 +375,38 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
   | 秘密の形 | `ghp_`・`gho_`・`ghu_`・`ghs_`・`ghr_`・`github_pat_`・`sk-ant-`・`sk-`・`xox[abprs]-`・`AKIA`/`ASIA`＋16 桁・`-----BEGIN … PRIVATE KEY-----` から `END` までのブロック・`eyJ…\.eyJ…\.…`（JWT）・`Authorization: (Bearer\|token\|Basic) …`・URL の userinfo（`https://<user>:<pass>@`） | `[redacted:<github-token\|anthropic-key\|private-key\|jwt\|auth-header\|url-credential\|…>]` |
   | 秘密らしい変数 | `env` やビルドログの `NAME=value` / `NAME: value` で、名前に `TOKEN`・`SECRET`・`PASSWORD`・`PASSWD`・`API_KEY`・`PRIVATE_KEY`・`CREDENTIAL`・`AUTH` を含むもの（大文字小文字を区別しない）の値 | `NAME=[redacted:env]` |
   | ホーム | `$HOME` の実パス（`/Users/<name>` と `/System/Volumes/Data/Users/<name>`。NFC に揃えたうえで、大文字小文字を区別しない）。`$TMPDIR` の `/var/folders/<xx>/<…>/` も | `~` / `$TMPDIR/` |
+  | ファイル・フォルダ名 | 下の「公開してよい場所」の外にあるパスの、**フォルダ名とファイル名のすべて**（`~/Documents/<顧客名>/<案件名>.vwx` のように、利用者の書類のパスは顧客名・案件名・氏名を含みうる）。`/Volumes/<ボリューム名>/…`・`file://` の URL（パーセントエンコードを戻してから）・引用符で囲まれたパスも | 部分ごとに仮名（`~/Documents/d-7c41e2/f-0b9e5a.vwx`。下記） |
   | 人と機械の名前 | macOS のユーザー名（語の境界で。3 文字未満ならパスの中に出たものだけ）・氏名（`NSFullUserName`）・コンピュータ名と LocalHostName（既定では「<氏名>の MacBook Pro」になる）・ハードウェア UUID とシリアル・つないだ iPhone の UDID・手元の git の `user.email`（`users.noreply.github.com` は除く） | `<user>` / `<name>` / `<host>` / `<uuid>` / `<serial>` / `<udid>` / `<email>` |
+
+  **ファイル・フォルダ名の仮名**は次のように決める。
+
+  - **公開してよい場所**（パスをそのまま残す）は、もともと公開されているか、設計書に
+    書いてある場所だけ: worktree の中（`<repo>/<リポジトリ内のパス>` に置き換える。annotation
+    と照らし合わせるのに要る）・dev-agent のデータ領域・キャッシュ・ログ（`<dev-agent>/…`）・
+    `~/Applications/dev-agent/`・既定ブランチの `dev-agent.policy.yaml` の `install` が
+    指す置き場所（Vectorworks の Plug-Ins など）・システムと道具（`/System`・`/Library`・
+    `/usr`・`/bin`・`/sbin`・`/Applications/Xcode*.app` と、アダプタが名指しする対象アプリの
+    `.app`）。表は Core に 1 つだけ持ち、足すときは本書と一緒に変える。
+  - それ以外（ホームの下・`/Volumes`・`$TMPDIR` の下・`/tmp`・`/private` など）は、
+    **既知の先頭を残し、そこから先の部分を 1 つずつ仮名にする**。macOS が決めた名前
+    （ホーム直下の `Documents`・`Desktop`・`Downloads`・`Library`・`Movies`・`Pictures`・
+    `Music`・`Public`、`Library` 直下の `Application Support`・`Caches`・`Preferences`・
+    `Logs`・`Containers`）は利用者の情報を含まないので残す。
+  - 仮名は `d-<6 桁>`（フォルダ）／`f-<6 桁>`（ファイル）。6 桁は、利用者ごとに 1 度だけ
+    作る鍵（キーチェーンの `dev-agent`）で取った、NFC に揃えた名前の HMAC-SHA256 の先頭
+    24 bit の 16 進。**同じ名前は周をまたいでも同じ仮名になる**ので、クラウドは「前の周と
+    同じファイル」「別のフォルダ」を読み分けられる。鍵が無いと元の名前は推し量れない
+    （ありそうな名前を試して当てる、を鍵で防ぐ）。拡張子は残す（`.vwx`・`.log`・
+    `.crash` はどの種類のファイルかを伝え、利用者の情報を含まない）。拡張子とみなすのは
+    最後の `.` の後の英数字 1〜8 文字だけで、それより前（`報告書.2026.vwx` の `.2026`）は
+    名前の一部として仮名にする。行番号の `:12:5` も残す。
+  - 仮名と元の名前の対応は、その周の記録に残し、手元の GUI では元の名前で見せる。
+  - **パスの終わりが曖昧なときは長く取る。** macOS のパスは空白を含む
+    （`Application Support`・`Vectorworks 2026`）ので、引用符の無いパスは、改行・タブ・
+    引用符・括弧の閉じ・`, ` が来るまでを 1 つのパスとして扱う。後ろの普通の文まで
+    仮名になることがあるが、伏せすぎる側に倒す。
+  - dev-agent が自分で開かせたファイル（Vectorworks の試験図面など）の名前は、パスの形を
+    とらずに単独でログに出ても当たるよう、完全一致の値にも加える（同じ仮名に置き換える）。
 
   完全一致の値と人と機械の名前は、`Redactor` を作るときに Adapters／GitHub 側が集めて
   渡す（Core は読みに行かない。純ロジックのまま）。短すぎる値（8 文字未満の秘密）は
@@ -390,7 +421,8 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
   へ出すのは伏せたものだけ。
 - **伏せ字で守れないもの**（残りのリスクとして受け入れ、ここに書いておく）: 上の形に
   当たらない第三者の秘密（リポジトリの `.env` をビルドが出力した等）、画面に写ったもの
-  （画面はそもそも載せない）、本文の中の意味（プロジェクト名や図面の中身）。漏れに
+  （画面はそもそも載せない）、パスの形をとらずに単独で出たファイル名（dev-agent が
+  開かせたもの以外）、本文の中の意味（図面の中身）。漏れに
   気付いたときのために、`dev-agent scrub --repo --pr` で dev-agent の check run の
   `output` を「伏せ直したもの」か空で PATCH して上書きする（GitHub は check run を消す
   API を持たないので、上書きが手段になる）。秘密が漏れたら、その値を作り直す（App の
@@ -399,7 +431,10 @@ head の sha ごとに、アダプタ 1 つにつき check run を 1 つ作る�
   コードが壊れるので、**当たったら push しない**。
 - `Redactor` は `swift test` で押さえる。種類ごとの例に加えて、日本語のユーザー名（NFC／NFD）、
   大文字小文字違いのホーム、改行や ANSI のエスケープで割られたトークン、PEM の途中の行、
-  語の中に含まれるユーザー名（伏せない）、「伏せ字 → 削る」で境目に掛かった秘密、
+  語の中に含まれるユーザー名（伏せない）、空白・日本語・パーセントエンコードを含む
+  パスの仮名（`file://` も）、周をまたいで同じ名前が同じ仮名になること、公開してよい
+  場所のパスが残ること、`~/Documents` などの既定の名前が残ること、
+  「伏せ字 → 削る」で境目に掛かった秘密、
   前の周を組み立て直したときの伏せ漏れ、を入れる。さらに「任意の本文に既知の秘密を
   差し込み、出力に 1 つも残らない」ことを乱数で多数回確かめる。
 
@@ -1113,7 +1148,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 19 | 歯止めの出どころ（issue #2） | **マニフェストを 2 つに分ける。確かめ方（`build` / `round` / `expect` / `artifact` / `context`）は `dev-agent.yaml` に置いて PR の head から読み、歯止め（`agent` / `install` / `kind` 等）は `dev-agent.policy.yaml` に置いてハーネス（`.claude/`・`CLAUDE.md`）とともに既定ブランチ（`default_branch`。PR の base ではない）から読む**。取り違えた節はスキーマのエラーにする。エージェントが書いてよいパスは**許可制で既定は拒否**（`agent.paths.allow` から `paths.deny` を除いたもの）。両マニフェスト・ハーネス・`.github/**`・`.gitmodules` は dev-agent が常に禁じ、マニフェストでは開けない。判定は `git diff --no-renames` と大文字小文字を区別しない照合で決定的に行う。既定ブランチへの直接 push はルールセットで禁じる（第 4.4・4.6・4.7 節）。push の資格情報と push 先は #20 |
 | 20 | 直しの push（issue #3） | **エージェントには GitHub の資格情報を渡さず、囲いから github.com へも出さない。直しは dev-agent が周の始めの sha の上の 1 つの commit（`DevAgent[bot]`）にまとめ、囲いの外の push 用のリポジトリで書いてよいパスを検査し、手元の 1 周が通ったものだけを App の installation token（Contents: write）で直しのブランチ `dev-agent/pr-<N>/r<round>` へ push する**。PR のブランチへは push しない。head の check run は `failure` のまま `fix_branch=` / `base=` / `fix=` / `compare=` を書き、直しの sha にも `success` の check run を付ける。**取り込むかはクラウドが決める**（fast-forward か cherry-pick。人も同じ手順で取り込める）。積み上げの PR は作らない。各リポジトリの `build.yml` は `dev-agent/**` への push で CI を走らせない。直しのブランチは「取り込まれた／新しい直しに置き換えられた／PR が閉じた」ときだけ消し、期限では消さない。書けるブランチを GitHub のルールセットで絞ることはせず、dev-agent のコード（`dev-agent/` 以外の refspec を作らない・`--force` を使わない・`dev-agent/` 以外を消さない）で守る（第 4.2・4.3・4.6・4.7・4.10 節）。予算の単位は issue #15 で決める |
 
-| 21 | 公開する前の伏せ字（issue #4） | **GitHub へ出ていく文字列（check run の `title`・`summary`・`text`・annotations、issue への 1 行）は、投稿の直前に Core の `Redactor` を必ず通す。その出力の型 `PublicText` は Core の外から作れず、GitHub への書き込み関数は `PublicText` しか受け取らない**（伏せ字を通らない経路を型で作れなくする）。順番は「揃える（ANSI 除去・NFC）→ 伏せ字 → 組み立て → 削る」で、前の周も生の記録から毎回組み立て直す。伏せるのは、dev-agent が持つ秘密の完全一致（App の鍵・webhook secret・中継の URL・installation token と JWT。エンコードした形も）・秘密の形（`ghp_` / `github_pat_` / `sk-` / `-----BEGIN` など）・秘密らしい名前の変数の値・ホームと `$TMPDIR`・ユーザー名・氏名・コンピュータ名・機器の識別子・手元の git の email。伏せた結果に完全一致の秘密が残る、または値を集められないときは本文を載せない。伏せる前の記録は手元（`~/Library/Logs/dev-agent/rounds/`）にだけ残す。直しの commit の足した行にも同じ検出をかけ、当たれば push しない。漏れたときは `dev-agent scrub` で check run の `output` を上書きし、秘密を作り直す（第 4.3・4.6・4.7・4.8・4.10 節） |
+| 21 | 公開する前の伏せ字（issue #4） | **GitHub へ出ていく文字列（check run の `title`・`summary`・`text`・annotations、issue への 1 行）は、投稿の直前に Core の `Redactor` を必ず通す。その出力の型 `PublicText` は Core の外から作れず、GitHub への書き込み関数は `PublicText` しか受け取らない**（伏せ字を通らない経路を型で作れなくする）。順番は「揃える（ANSI 除去・NFC）→ 伏せ字 → 組み立て → 削る」で、前の周も生の記録から毎回組み立て直す。伏せるのは、dev-agent が持つ秘密の完全一致（App の鍵・webhook secret・中継の URL・installation token と JWT。エンコードした形も）・秘密の形（`ghp_` / `github_pat_` / `sk-` / `-----BEGIN` など）・秘密らしい名前の変数の値・ホームと `$TMPDIR`・ユーザー名・氏名・コンピュータ名・機器の識別子・手元の git の email。公開してよい場所（worktree・dev-agent の置き場所・システムと道具）の外のパスは、macOS が決めた名前を除いて**フォルダ名とファイル名を部分ごとに仮名**（利用者ごとの鍵で取った HMAC の `d-<6 桁>` / `f-<6 桁>`。周をまたいで同じ名前は同じ仮名、拡張子は残す）にし、対応は手元にだけ残す。伏せた結果に完全一致の秘密が残る、または値を集められないときは本文を載せない。伏せる前の記録は手元（`~/Library/Logs/dev-agent/rounds/`）にだけ残す。直しの commit の足した行にも同じ検出をかけ、当たれば push しない。漏れたときは `dev-agent scrub` で check run の `output` を上書きし、秘密を作り直す（第 4.3・4.6・4.7・4.8・4.10 節） |
 
 ### 決めてほしいこと
 
@@ -1134,7 +1169,7 @@ M1 から入れる。理由は、dev-agent 自身の開発が「PR → dev ビ�
 | 合図 | App の webhook が中継（smee.io）を通って dev-agent に届くイベント。本文は信じず、PR 番号だけ取り出して API で読み直す |
 | check run | dev-agent が GitHub App として PR の head に作る実機の結果。名前 `DevAgent / <kind> (macOS)` |
 | 直しのブランチ | ローカルの直しを載せて dev-agent が push するブランチ `dev-agent/pr-<N>/r<round>`。PR の head の直上に 1 commit だけを置き、取り込むかはクラウドが決める |
-| 伏せ字（`Redactor`） | GitHub へ出す前に、秘密・ホーム・ユーザー名などを `[redacted:<種類>]` や `~` に置き換える Core の純ロジック。出力の型 `PublicText` だけが GitHub へ書ける |
+| 伏せ字（`Redactor`） | GitHub へ出す前に、秘密・ホーム・ユーザー名などを `[redacted:<種類>]` や `~` に、利用者のファイル・フォルダ名を仮名（`d-<6 桁>` / `f-<6 桁>`）に置き換える Core の純ロジック。出力の型 `PublicText` だけが GitHub へ書ける |
 | 周の記録 | `~/Library/Logs/dev-agent/rounds/` に残す、伏せる前の本文・ログ・画面。手元の GUI だけが見せる |
 | push 用のリポジトリ | データ領域の `state/push/<repo>.git`。dev-agent が直しの commit を作り、検査し、push する bare リポジトリで、エージェントの囲いからは見えない |
 
